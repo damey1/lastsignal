@@ -1,0 +1,19 @@
+# Environment variables - NEVER commit this
+.env
+
+# Hardhat
+node_modules
+cache
+artifacts
+coverage
+coverage.json
+typechain
+typechain-types
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea

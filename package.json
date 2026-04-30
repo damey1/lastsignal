@@ -1,0 +1,19 @@
+{
+  "name": "lastsignal",
+  "version": "1.0.0",
+  "description": "LastSignal — your EchoLife onchain. AI-powered proof of life & message capsule protocol built on Ritual Chain.",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:testnet": "hardhat run scripts/deploy.js --network ritual",
+    "deploy:local": "hardhat run scripts/deploy.js --network hardhat",
+    "node": "hardhat node"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.22.0",
+    "dotenv": "^16.4.0"
+  },
+  "author": "Maxiq (@cryptomaxiq)",
+  "license": "MIT"
+}
