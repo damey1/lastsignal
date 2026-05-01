@@ -1,5 +1,5 @@
 # Environment variables - NEVER commit this
-.env
+.env*
 
 # Hardhat
 node_modules
