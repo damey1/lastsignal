@@ -21,6 +21,21 @@ contract CheckIn {
         bool exists;              // whether user has ever checked in
     }
 
+    enum SignalLevel {
+        None,
+        New,
+        Stable,
+        Strong,
+        Legendary
+    }
+
+    enum GhostRisk {
+        Unknown,
+        Active,
+        Watch,
+        Ghost
+    }
+
     // ── STATE ──
 
     mapping(address => UserSignal) private signals;
@@ -161,7 +176,56 @@ contract CheckIn {
         return signals[user].lastCheckIn;
     }
 
+    /**
+     * @notice Get a user's streak tier.
+     */
+    function signalLevel(address user) external view returns (SignalLevel) {
+        UserSignal storage signal = signals[user];
+        if (!signal.exists) return SignalLevel.None;
+
+        if (signal.currentStreak >= 30) return SignalLevel.Legendary;
+        if (signal.currentStreak >= 14) return SignalLevel.Strong;
+        if (signal.currentStreak >= 7) return SignalLevel.Stable;
+        return SignalLevel.New;
+    }
+
+    /**
+     * @notice Get a user's inactivity risk level.
+     */
+    function ghostRisk(address user) external view returns (GhostRisk) {
+        UserSignal storage signal = signals[user];
+        if (!signal.exists) return GhostRisk.Unknown;
+
+        uint256 silence = block.timestamp - signal.lastCheckIn;
+        if (silence > GHOST_THRESHOLD) return GhostRisk.Ghost;
+        if (silence > STREAK_WINDOW) return GhostRisk.Watch;
+        return GhostRisk.Active;
+    }
+
+    /**
+     * @notice Get a simple 0-100 signal strength score.
+     */
+    function signalScore(address user) external view returns (uint256) {
+        UserSignal storage signal = signals[user];
+        if (!signal.exists) return 0;
+
+        uint256 silence = block.timestamp - signal.lastCheckIn;
+        if (silence > GHOST_THRESHOLD) return 0;
+
+        uint256 score = 20;
+        score += _min(signal.currentStreak * 2, 40);
+        score += _min(signal.longestStreak, 25);
+        score += _min(signal.totalCheckIns, 15);
+
+        if (silence > STREAK_WINDOW && score > 60) return 60;
+        return _min(score, 100);
+    }
+
     function _dayOf(uint256 timestamp) private pure returns (uint256) {
         return timestamp / 1 days;
+    }
+
+    function _min(uint256 a, uint256 b) private pure returns (uint256) {
+        return a < b ? a : b;
     }
 }

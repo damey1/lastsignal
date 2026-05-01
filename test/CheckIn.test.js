@@ -18,6 +18,14 @@ describe("CheckIn — Heartbeat Contract", function () {
     return (Math.floor(latest / DAY) + offset) * DAY;
   }
 
+  async function buildDailyStreak(user, days) {
+    const day = await futureDay();
+    for (let i = 0; i < days; i++) {
+      await time.setNextBlockTimestamp(day + i * DAY + 12 * 60 * 60);
+      await checkIn.connect(user).checkIn();
+    }
+  }
+
   describe("First check-in", () => {
     it("should register a new user on first check-in", async () => {
       await checkIn.connect(user1).checkIn();
@@ -107,6 +115,52 @@ describe("CheckIn — Heartbeat Contract", function () {
       await time.increase(5 * 24 * 60 * 60); // 5 days
       const silence = await checkIn.silenceDuration(user1.address);
       expect(silence).to.be.closeTo(5 * 24 * 60 * 60, 5);
+    });
+  });
+
+  describe("Signal gamification", () => {
+    it("should return empty defaults for users without a heartbeat", async () => {
+      expect(await checkIn.signalLevel(user1.address)).to.equal(0);
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(0);
+      expect(await checkIn.signalScore(user1.address)).to.equal(0);
+    });
+
+    it("should classify new, stable, strong, and legendary streak tiers", async () => {
+      await checkIn.connect(user1).checkIn();
+      expect(await checkIn.signalLevel(user1.address)).to.equal(1);
+
+      await buildDailyStreak(user2, 7);
+      expect(await checkIn.signalLevel(user2.address)).to.equal(2);
+
+      await buildDailyStreak(owner, 14);
+      expect(await checkIn.signalLevel(owner.address)).to.equal(3);
+
+      const [, , , user3] = await ethers.getSigners();
+      await buildDailyStreak(user3, 30);
+      expect(await checkIn.signalLevel(user3.address)).to.equal(4);
+    });
+
+    it("should report active, watch, and ghost risk levels", async () => {
+      await checkIn.connect(user1).checkIn();
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(1);
+
+      await time.increase(3 * DAY);
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(2);
+
+      await time.increase(28 * DAY);
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(3);
+    });
+
+    it("should calculate signal score and cap stale signals", async () => {
+      await buildDailyStreak(user1, 7);
+      const activeScore = await checkIn.signalScore(user1.address);
+      expect(activeScore).to.be.greaterThan(20);
+
+      await time.increase(3 * DAY);
+      expect(await checkIn.signalScore(user1.address)).to.be.at.most(60);
+
+      await time.increase(28 * DAY);
+      expect(await checkIn.signalScore(user1.address)).to.equal(0);
     });
   });
 });
