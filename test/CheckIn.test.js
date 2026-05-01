@@ -5,12 +5,18 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 describe("CheckIn — Heartbeat Contract", function () {
   let checkIn;
   let owner, user1, user2;
+  const DAY = 24 * 60 * 60;
 
   beforeEach(async () => {
     [owner, user1, user2] = await ethers.getSigners();
     const CheckIn = await ethers.getContractFactory("CheckIn");
     checkIn = await CheckIn.deploy();
   });
+
+  async function futureDay(offset = 1) {
+    const latest = await time.latest();
+    return (Math.floor(latest / DAY) + offset) * DAY;
+  }
 
   describe("First check-in", () => {
     it("should register a new user on first check-in", async () => {
@@ -41,8 +47,10 @@ describe("CheckIn — Heartbeat Contract", function () {
 
   describe("Streak tracking", () => {
     it("should build streak on consecutive check-ins", async () => {
+      const day = await futureDay();
+      await time.setNextBlockTimestamp(day + 10 * 60 * 60);
       await checkIn.connect(user1).checkIn();
-      await time.increase(13 * 60 * 60); // 13 hours later
+      await time.setNextBlockTimestamp(day + DAY + 9 * 60 * 60);
       await checkIn.connect(user1).checkIn();
       const signal = await checkIn.getSignal(user1.address);
       expect(signal.currentStreak).to.equal(2);
@@ -57,10 +65,26 @@ describe("CheckIn — Heartbeat Contract", function () {
       expect(signal.currentStreak).to.equal(1); // reset to 1
     });
 
-    it("should prevent check-in within 12 hour window", async () => {
+    it("should prevent more than one check-in per UTC day", async () => {
+      const day = await futureDay();
+      await time.setNextBlockTimestamp(day + 1 * 60 * 60);
       await checkIn.connect(user1).checkIn();
+      await time.setNextBlockTimestamp(day + 23 * 60 * 60);
       await expect(checkIn.connect(user1).checkIn())
-        .to.be.revertedWith("Already checked in recently. Come back later.");
+        .to.be.revertedWithCustomError(checkIn, "AlreadyCheckedInToday");
+    });
+
+    it("should allow the next check-in on the next UTC day", async () => {
+      const day = await futureDay();
+      await time.setNextBlockTimestamp(day + 23 * 60 * 60);
+      await checkIn.connect(user1).checkIn();
+
+      await time.increaseTo(day + DAY + 1);
+      expect(await checkIn.canCheckIn(user1.address)).to.equal(true);
+
+      await checkIn.connect(user1).checkIn();
+      const signal = await checkIn.getSignal(user1.address);
+      expect(signal.totalCheckIns).to.equal(2);
     });
   });
 

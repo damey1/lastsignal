@@ -112,4 +112,72 @@ describe("MessageVault — Heartbeat-gated vault", function () {
     await expect(vault.connect(recipient).claimMessage(messageId))
       .to.be.revertedWithCustomError(vault, "MessageIsCanceled");
   });
+
+  it("allows the owner to read and rotate locked encrypted content", async () => {
+    await checkIn.connect(owner).checkIn();
+    const messageId = await sealMessage();
+
+    expect(await vault.connect(owner).readOwnMessage(messageId))
+      .to.equal("encrypted://message");
+    await expect(vault.connect(other).readOwnMessage(messageId))
+      .to.be.revertedWithCustomError(vault, "NotOwner");
+
+    const tx = await vault
+      .connect(owner)
+      .updateMessageContent(messageId, "encrypted://rotated");
+
+    await expect(tx)
+      .to.emit(vault, "MessageContentUpdated")
+      .withArgs(messageId, owner.address, await blockTimestamp(tx));
+
+    expect(await vault.connect(owner).readOwnMessage(messageId))
+      .to.equal("encrypted://rotated");
+
+    await time.increase(SEVEN_DAYS + 1);
+    await vault.connect(recipient).claimMessage(messageId);
+    expect(await vault.connect(recipient).readMessage(messageId))
+      .to.equal("encrypted://rotated");
+  });
+
+  it("allows only the owner to update the inactivity unlock while locked", async () => {
+    await checkIn.connect(owner).checkIn();
+    const messageId = await sealMessage();
+    const newDelay = 14 * 24 * 60 * 60;
+
+    await expect(vault.connect(other).updateInactivityUnlock(messageId, newDelay))
+      .to.be.revertedWithCustomError(vault, "NotOwner");
+
+    const tx = await vault
+      .connect(owner)
+      .updateInactivityUnlock(messageId, newDelay);
+
+    await expect(tx)
+      .to.emit(vault, "MessageUnlockDelayUpdated")
+      .withArgs(messageId, owner.address, newDelay, await blockTimestamp(tx));
+
+    await time.increase(SEVEN_DAYS + 1);
+    expect(await vault.isUnlockable(messageId)).to.equal(false);
+
+    await time.increase(SEVEN_DAYS);
+    expect(await vault.isUnlockable(messageId)).to.equal(true);
+  });
+
+  it("blocks owner updates after a message is unlocked or canceled", async () => {
+    await checkIn.connect(owner).checkIn();
+    const canceledId = await sealMessage(owner, recipient, "encrypted://cancel");
+    const unlockedId = await sealMessage(owner, recipient, "encrypted://unlock");
+
+    await vault.connect(owner).cancelMessage(canceledId);
+    await expect(vault.connect(owner).updateMessageContent(canceledId, "x"))
+      .to.be.revertedWithCustomError(vault, "MessageIsCanceled");
+    await expect(vault.connect(owner).updateInactivityUnlock(canceledId, SEVEN_DAYS))
+      .to.be.revertedWithCustomError(vault, "MessageIsCanceled");
+
+    await time.increase(SEVEN_DAYS + 1);
+    await vault.connect(recipient).claimMessage(unlockedId);
+    await expect(vault.connect(owner).updateMessageContent(unlockedId, "x"))
+      .to.be.revertedWithCustomError(vault, "AlreadyUnlocked");
+    await expect(vault.connect(owner).updateInactivityUnlock(unlockedId, SEVEN_DAYS))
+      .to.be.revertedWithCustomError(vault, "AlreadyUnlocked");
+  });
 });

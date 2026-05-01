@@ -72,11 +72,9 @@ contract CheckIn {
             signal.longestStreak = 1;
             allUsers.push(msg.sender);
         } else {
-            // Must wait at least 12 hours between check-ins (prevent spam)
-            require(
-                block.timestamp >= signal.lastCheckIn + 12 hours,
-                "Already checked in recently. Come back later."
-            );
+            if (_dayOf(block.timestamp) == _dayOf(signal.lastCheckIn)) {
+                revert AlreadyCheckedInToday();
+            }
 
             // Check if streak is still alive (within 48hr window)
             if (block.timestamp <= signal.lastCheckIn + STREAK_WINDOW) {
@@ -141,11 +139,11 @@ contract CheckIn {
     }
 
     /**
-     * @notice Check if user is eligible to check in (12hr cooldown passed)
+     * @notice Check if user is eligible to check in (next UTC day reached)
      */
     function canCheckIn(address user) external view returns (bool) {
         if (!signals[user].exists) return true;
-        return block.timestamp >= signals[user].lastCheckIn + 12 hours;
+        return _dayOf(block.timestamp) > _dayOf(signals[user].lastCheckIn);
     }
 
     /**
@@ -161,5 +159,9 @@ contract CheckIn {
     function lastSeen(address user) external view returns (uint256) {
         if (!signals[user].exists) revert UserNotFound();
         return signals[user].lastCheckIn;
+    }
+
+    function _dayOf(uint256 timestamp) private pure returns (uint256) {
+        return timestamp / 1 days;
     }
 }

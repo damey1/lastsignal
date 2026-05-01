@@ -68,6 +68,19 @@ contract MessageVault {
         uint256 canceledAt
     );
 
+    event MessageContentUpdated(
+        bytes32 indexed messageId,
+        address indexed owner,
+        uint256 updatedAt
+    );
+
+    event MessageUnlockDelayUpdated(
+        bytes32 indexed messageId,
+        address indexed owner,
+        uint256 inactivityUnlock,
+        uint256 updatedAt
+    );
+
     // ── ERRORS ──
 
     error MessageNotFound();
@@ -163,14 +176,54 @@ contract MessageVault {
     function cancelMessage(bytes32 messageId) external {
         Message storage m = messages[messageId];
 
-        if (!m.exists) revert MessageNotFound();
-        if (m.owner != msg.sender) revert NotOwner();
-        if (m.unlocked) revert AlreadyUnlocked();
-        if (m.canceled) revert MessageIsCanceled();
+        _requireOwnedLockedMessage(m);
 
         m.canceled = true;
 
         emit MessageCanceled(messageId, msg.sender, block.timestamp);
+    }
+
+    /**
+     * @notice Rotate the encrypted content of a locked message.
+     * @param messageId The ID of the message to update
+     * @param encryptedContent New encrypted message content
+     */
+    function updateMessageContent(
+        bytes32 messageId,
+        string calldata encryptedContent
+    ) external {
+        require(bytes(encryptedContent).length > 0, "Message cannot be empty");
+
+        Message storage m = messages[messageId];
+        _requireOwnedLockedMessage(m);
+
+        m.encryptedContent = encryptedContent;
+
+        emit MessageContentUpdated(messageId, msg.sender, block.timestamp);
+    }
+
+    /**
+     * @notice Update the inactivity threshold for a locked message.
+     * @param messageId The ID of the message to update
+     * @param inactivityUnlock New seconds of silence before unlock
+     */
+    function updateInactivityUnlock(
+        bytes32 messageId,
+        uint256 inactivityUnlock
+    ) external {
+        require(inactivityUnlock >= 7 days, "Minimum unlock threshold is 7 days");
+
+        Message storage m = messages[messageId];
+        _requireOwnedLockedMessage(m);
+
+        m.inactivityUnlock = inactivityUnlock;
+
+        emit MessageUnlockDelayUpdated(
+            messageId,
+            msg.sender,
+            inactivityUnlock,
+            block.timestamp
+        );
     }
 
     // ── VIEW FUNCTIONS ──
@@ -184,6 +237,17 @@ contract MessageVault {
         if (m.recipient != msg.sender) revert NotRecipient();
         if (m.canceled) revert MessageIsCanceled();
         if (!m.unlocked) revert StillLocked();
+        return m.encryptedContent;
+    }
+
+    /**
+     * @notice Read your own encrypted message content at any time.
+     */
+    function readOwnMessage(bytes32 messageId) external view returns (string memory) {
+        Message storage m = messages[messageId];
+        if (!m.exists) revert MessageNotFound();
+        if (m.owner != msg.sender) revert NotOwner();
+        if (m.canceled) revert MessageIsCanceled();
         return m.encryptedContent;
     }
 
@@ -271,5 +335,12 @@ contract MessageVault {
         } catch {
             revert HeartbeatNotFound();
         }
+    }
+
+    function _requireOwnedLockedMessage(Message storage m) private view {
+        if (!m.exists) revert MessageNotFound();
+        if (m.owner != msg.sender) revert NotOwner();
+        if (m.unlocked) revert AlreadyUnlocked();
+        if (m.canceled) revert MessageIsCanceled();
     }
 }
