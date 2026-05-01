@@ -5,6 +5,9 @@
 node_modules
 cache
 artifacts
+.cache
+.config
+.local
 coverage
 coverage.json
 typechain

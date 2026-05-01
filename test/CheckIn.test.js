@@ -18,12 +18,18 @@ describe("CheckIn — Heartbeat Contract", function () {
       const signal = await checkIn.getSignal(user1.address);
       expect(signal.exists).to.be.true;
       expect(signal.totalCheckIns).to.equal(1);
+      expect(signal.currentStreak).to.equal(1);
+      expect(signal.longestStreak).to.equal(1);
     });
 
     it("should emit HeartBeat event", async () => {
-      await expect(checkIn.connect(user1).checkIn())
+      const tx = await checkIn.connect(user1).checkIn();
+      const receipt = await tx.wait();
+      const block = await ethers.provider.getBlock(receipt.blockNumber);
+
+      await expect(tx)
         .to.emit(checkIn, "HeartBeat")
-        .withArgs(user1.address, await time.latest() + 1, 0, 1);
+        .withArgs(user1.address, block.timestamp, 1, 1);
     });
 
     it("should track total users", async () => {
@@ -39,7 +45,8 @@ describe("CheckIn — Heartbeat Contract", function () {
       await time.increase(13 * 60 * 60); // 13 hours later
       await checkIn.connect(user1).checkIn();
       const signal = await checkIn.getSignal(user1.address);
-      expect(signal.currentStreak).to.equal(1);
+      expect(signal.currentStreak).to.equal(2);
+      expect(signal.longestStreak).to.equal(2);
     });
 
     it("should break streak after 48 hours", async () => {

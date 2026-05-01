@@ -68,6 +68,8 @@ contract CheckIn {
         if (!signal.exists) {
             signal.exists = true;
             signal.joinedAt = block.timestamp;
+            signal.currentStreak = 1;
+            signal.longestStreak = 1;
             allUsers.push(msg.sender);
         } else {
             // Must wait at least 12 hours between check-ins (prevent spam)
