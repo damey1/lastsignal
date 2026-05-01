@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LastSignal App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="app-body">
+<canvas id="bg-canvas"></canvas>
+
+<nav>
+  <a class="nav-logo nav-link" href="index.html">Last<span>Signal</span></a>
+  <div class="nav-actions">
+    <span id="network-label" class="nav-tag">wallet offline</span>
+    <button id="connect-wallet" class="app-button app-button-small">Connect</button>
+  </div>
+</nav>
+
+<main class="app-shell">
+  <section class="app-header">
+    <div>
+      <div class="section-label">signal console</div>
+      <h1 class="app-title">Daily heartbeat and vault</h1>
+    </div>
+    <div id="wallet-pill" class="status-pill">Not connected</div>
+  </section>
+
+  <section class="app-grid">
+    <div class="app-panel config-panel">
+      <div class="panel-heading">
+        <h2>Contracts</h2>
+        <button id="save-contracts" class="app-button app-button-small">Save</button>
+      </div>
+      <label class="field-label" for="checkin-address">CheckIn address</label>
+      <input id="checkin-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
+      <label class="field-label" for="vault-address">MessageVault address</label>
+      <input id="vault-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
+      <p id="config-status" class="muted-line">No contracts loaded</p>
+    </div>
+
+    <div class="app-panel signal-panel">
+      <div class="panel-heading">
+        <h2>Signal</h2>
+        <button id="refresh-signal" class="icon-button" title="Refresh signal">↻</button>
+      </div>
+      <div class="score-row">
+        <div>
+          <span class="metric-label">Score</span>
+          <strong id="signal-score" class="score-value">--</strong>
+        </div>
+        <div id="signal-level" class="status-pill">None</div>
+      </div>
+      <div class="metric-grid">
+        <div>
+          <span class="metric-label">Current streak</span>
+          <strong id="current-streak">--</strong>
+        </div>
+        <div>
+          <span class="metric-label">Longest streak</span>
+          <strong id="longest-streak">--</strong>
+        </div>
+        <div>
+          <span class="metric-label">Check-ins</span>
+          <strong id="total-checkins">--</strong>
+        </div>
+        <div>
+          <span class="metric-label">Risk</span>
+          <strong id="ghost-risk">--</strong>
+        </div>
+      </div>
+      <div class="panel-actions">
+        <button id="check-in" class="app-button">Check in</button>
+      </div>
+      <p id="signal-status" class="muted-line">Connect wallet to load your signal</p>
+    </div>
+  </section>
+
+  <section class="app-grid app-grid-wide">
+    <div class="app-panel">
+      <div class="panel-heading">
+        <h2>Seal Message</h2>
+      </div>
+      <label class="field-label" for="recipient-address">Recipient</label>
+      <input id="recipient-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
+      <label class="field-label" for="unlock-days">Unlock delay in days</label>
+      <input id="unlock-days" class="app-input" type="number" min="7" step="1" value="30">
+      <label class="field-label" for="encrypted-content">Encrypted content</label>
+      <textarea id="encrypted-content" class="app-textarea" rows="6" placeholder="encrypted://..."></textarea>
+      <button id="seal-message" class="app-button">Seal message</button>
+      <p id="seal-status" class="muted-line">Heartbeat required before sealing</p>
+    </div>
+
+    <div class="app-panel">
+      <div class="panel-heading">
+        <h2>Owner Updates</h2>
+      </div>
+      <label class="field-label" for="manage-message-id">Message ID</label>
+      <input id="manage-message-id" class="app-input" type="text" autocomplete="off" placeholder="0x...">
+      <label class="field-label" for="updated-content">New encrypted content</label>
+      <textarea id="updated-content" class="app-textarea" rows="4" placeholder="encrypted://..."></textarea>
+      <label class="field-label" for="updated-unlock-days">New unlock delay in days</label>
+      <input id="updated-unlock-days" class="app-input" type="number" min="7" step="1" value="30">
+      <div class="split-actions">
+        <button id="read-own-message" class="app-button app-button-secondary">Read own</button>
+        <button id="update-content" class="app-button app-button-secondary">Rotate</button>
+        <button id="update-delay" class="app-button app-button-secondary">Delay</button>
+        <button id="cancel-message" class="app-button app-button-danger">Cancel</button>
+      </div>
+      <p id="manage-status" class="muted-line">Locked owner messages can be updated</p>
+    </div>
+  </section>
+
+  <section class="app-panel messages-panel">
+    <div class="panel-heading">
+      <h2>Messages</h2>
+      <button id="refresh-messages" class="icon-button" title="Refresh messages">↻</button>
+    </div>
+    <div class="message-columns">
+      <div>
+        <h3 class="subhead">Owned</h3>
+        <div id="owned-messages" class="message-list"></div>
+      </div>
+      <div>
+        <h3 class="subhead">For You</h3>
+        <div id="recipient-messages" class="message-list"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<script src="js/main.js" defer></script>
+<script src="js/app.js" defer></script>
+</body>
+</html>
