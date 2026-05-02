@@ -107,8 +107,11 @@ function setStatus(node, text) {
 }
 
 function loadConfig() {
-  ui.checkInAddress.value = localStorage.getItem("lastsignal.checkIn") || "";
-  ui.vaultAddress.value = localStorage.getItem("lastsignal.vault") || "";
+  const DEPLOYED_CHECKIN = "0x2a19C36007194005146D40E80886C9007ed4971F";
+  const DEPLOYED_VAULT = "0x3C7a639926031E3DcC61f9F8666d792fCC71E73A";
+
+  ui.checkInAddress.value = localStorage.getItem("lastsignal.checkIn") || DEPLOYED_CHECKIN;
+  ui.vaultAddress.value = localStorage.getItem("lastsignal.vault") || DEPLOYED_VAULT;
   configureContracts();
 }
 
