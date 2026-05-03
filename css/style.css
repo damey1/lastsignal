@@ -111,6 +111,26 @@
     text-transform: uppercase;
   }
 
+  .nav-app-btn {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--purple-light);
+    border: 1px solid rgba(124, 92, 191, 0.35);
+    border-radius: 4px;
+    padding: 7px 14px;
+    background: rgba(124, 92, 191, 0.1);
+    transition: background 0.2s, border-color 0.2s, transform 0.2s;
+  }
+
+  .nav-app-btn:hover {
+    background: rgba(124, 92, 191, 0.2);
+    border-color: rgba(124, 92, 191, 0.6);
+    transform: translateY(-1px);
+  }
+
   .nav-actions {
     display: flex;
     align-items: center;

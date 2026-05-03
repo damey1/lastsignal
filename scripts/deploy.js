@@ -29,16 +29,29 @@ async function main() {
   const vaultAddress = await messageVault.getAddress();
   console.log(`✅ MessageVault deployed: ${vaultAddress}\n`);
 
+  // ── Write deployed.json ──
+  const { network } = hre;
+  const fs = require("fs");
+  const path = require("path");
+  const deployedJson = {
+    checkIn: checkInAddress,
+    messageVault: vaultAddress,
+    network: network.name,
+  };
+  const outPath = path.join(__dirname, "..", "deployed.json");
+  fs.writeFileSync(outPath, JSON.stringify(deployedJson, null, 2));
+  console.log(`📝 Wrote ${outPath}\n`);
+
   // ── Summary ──
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("  ✅ DEPLOYMENT COMPLETE");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`  CheckIn:      ${checkInAddress}`);
   console.log(`  MessageVault: ${vaultAddress}`);
-  console.log(`  Network:      Ritual Chain (1979)`);
+  console.log(`  Network:      ${network.name}`);
   console.log(`  Explorer:     https://explorer.ritualfoundation.org`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("\n📋 Save these addresses in your .env and frontend config!");
+  console.log("\n📋 deployed.json written — frontend will pick up these addresses automatically.");
 }
 
 main()
