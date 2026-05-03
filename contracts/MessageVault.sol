@@ -114,6 +114,7 @@ contract MessageVault {
     ) external returns (bytes32 messageId) {
         require(recipient != address(0), "Invalid recipient");
         require(bytes(encryptedContent).length > 0, "Message cannot be empty");
+        require(bytes(encryptedContent).length <= 100000, "Message too large (max 100KB)");
         require(inactivityUnlock >= 2 days, "Minimum unlock threshold is 2 days");
 
         _requireHeartbeat(msg.sender);
@@ -193,6 +194,7 @@ contract MessageVault {
         string calldata encryptedContent
     ) external {
         require(bytes(encryptedContent).length > 0, "Message cannot be empty");
+        require(bytes(encryptedContent).length <= 100000, "Message too large (max 100KB)");
 
         Message storage m = messages[messageId];
         _requireOwnedLockedMessage(m);
