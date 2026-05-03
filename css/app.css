@@ -317,6 +317,30 @@
   }
 }
 
+.chain-warning {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #b84a4a;
+  color: #fff;
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.chain-warning strong {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 @media (max-width: 560px) {
   .app-shell {
     padding: 104px 18px 40px;

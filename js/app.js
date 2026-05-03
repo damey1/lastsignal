@@ -22,6 +22,9 @@ const VAULT_ABI = [
   "event MessageSealed(bytes32 indexed messageId,address indexed owner,address indexed recipient,uint256 unlockAfter,uint256 timestamp)"
 ];
 
+const RITUAL_CHAIN_ID = 1979;
+const RITUAL_CHAIN_HEX = "0x7BB";
+
 const levelLabels = ["None", "New", "Stable", "Strong", "Legendary"];
 const riskLabels = ["Unknown", "Active", "Watch", "Ghost"];
 const daySeconds = 24 * 60 * 60;
@@ -94,6 +97,17 @@ function formatDate(timestamp) {
   return new Date(value * 1000).toLocaleString();
 }
 
+function explorerTxUrl(txHash) {
+  return `https://explorer.ritualfoundation.org/tx/${txHash}`;
+}
+
+async function gasEstimateLabel() {
+  const fee = await state.provider.getFeeData();
+  if (!fee.gasPrice) return "";
+  const gwei = ethers.formatUnits(fee.gasPrice, "gwei");
+  return `[${Number(gwei).toFixed(1)} gwei]`;
+}
+
 function setText(node, text) {
   if (node) node.textContent = text;
 }
@@ -145,6 +159,31 @@ function requireContracts() {
   if (!state.checkIn || !state.vault) throw new Error("Load contract addresses first");
 }
 
+async function switchToRitualChain() {
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: RITUAL_CHAIN_HEX }],
+    });
+  } catch (switchError) {
+    // 4902 = chain not added yet
+    if (switchError.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: RITUAL_CHAIN_HEX,
+          chainName: "Ritual Chain",
+          nativeCurrency: { name: "RITUAL", symbol: "RITUAL", decimals: 18 },
+          rpcUrls: ["https://rpc.ritualfoundation.org"],
+          blockExplorerUrls: ["https://explorer.ritualfoundation.org"],
+        }],
+      });
+    } else {
+      throw switchError;
+    }
+  }
+}
+
 async function connectWallet() {
   if (!window.ethereum) {
     setStatus(ui.signalStatus, "No EVM wallet detected");
@@ -157,9 +196,32 @@ async function connectWallet() {
   state.account = await state.signer.getAddress();
 
   const network = await state.provider.getNetwork();
+  const onCorrectChain = Number(network.chainId) === RITUAL_CHAIN_ID;
+
   setText(ui.wallet, shortAddress(state.account));
-  setText(ui.network, `chain ${network.chainId.toString()}`);
+  setText(ui.network, onCorrectChain ? "Ritual Chain" : `Wrong chain (${network.chainId})`);
   setText(ui.connect, "Connected");
+
+  const warning = document.getElementById("chain-warning");
+  if (warning) {
+    warning.style.display = onCorrectChain ? "none" : "flex";
+  }
+
+  if (!onCorrectChain) {
+    setStatus(ui.signalStatus, "Switch to Ritual Chain to continue");
+    try {
+      await switchToRitualChain();
+      // After switching, reload so provider picks up the new chain
+      window.location.reload();
+    } catch {
+      setStatus(ui.signalStatus, "Please switch to Ritual Chain (ID 1979) in your wallet");
+    }
+    return;
+  }
+
+  // Native $RITUAL is already configured as the chain currency via
+  // the wallet_addEthereumChain call in switchToRitualChain.
+  // No separate watchAsset needed for native tokens.
 
   configureContracts();
   await refreshAll();
@@ -200,11 +262,13 @@ async function refreshSignal() {
 async function sendCheckIn() {
   requireContracts();
   setBusy(ui.checkInButton, true);
-  setStatus(ui.signalStatus, "Sending heartbeat...");
   try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.signalStatus, `Sending heartbeat ${gas}`.trim());
     const tx = await state.checkIn.checkIn();
-    await tx.wait();
-    setStatus(ui.signalStatus, "Heartbeat confirmed");
+    const receipt = await tx.wait();
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.signalStatus, `Heartbeat confirmed — ${link}`);
     await refreshAll();
   } catch (error) {
     setStatus(ui.signalStatus, readableError(error));
@@ -222,14 +286,16 @@ async function sealMessage() {
   if (!content) throw new Error("Encrypted content is required");
 
   setBusy(ui.sealMessage, true);
-  setStatus(ui.sealStatus, "Sealing message...");
 
   try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.sealStatus, `Sealing message ${gas}`.trim());
     const tx = await state.vault.sealMessage(recipient, content, daysToSeconds(ui.unlockDays.value));
     const receipt = await tx.wait();
     const messageId = findMessageId(receipt);
+    const link = explorerTxUrl(receipt.hash);
     ui.manageMessageId.value = messageId || "";
-    setStatus(ui.sealStatus, messageId ? `Sealed ${messageId}` : "Message sealed");
+    setStatus(ui.sealStatus, messageId ? `Sealed ${messageId} — ${link}` : `Message sealed — ${link}`);
     ui.encryptedContent.value = "";
     await refreshMessages();
   } catch (error) {
@@ -361,11 +427,13 @@ async function updateContent() {
   if (!messageId || !content) throw new Error("Message ID and content required");
 
   setBusy(ui.updateContent, true);
-  setStatus(ui.manageStatus, "Rotating content...");
   try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.manageStatus, `Rotating content ${gas}`.trim());
     const tx = await state.vault.updateMessageContent(messageId, content);
-    await tx.wait();
-    setStatus(ui.manageStatus, "Content updated");
+    const receipt = await tx.wait();
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.manageStatus, `Content updated — ${link}`);
     await refreshMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
@@ -380,11 +448,13 @@ async function updateDelay() {
   if (!messageId) throw new Error("Message ID required");
 
   setBusy(ui.updateDelay, true);
-  setStatus(ui.manageStatus, "Updating delay...");
   try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.manageStatus, `Updating delay ${gas}`.trim());
     const tx = await state.vault.updateInactivityUnlock(messageId, daysToSeconds(ui.updatedUnlockDays.value));
-    await tx.wait();
-    setStatus(ui.manageStatus, "Delay updated");
+    const receipt = await tx.wait();
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.manageStatus, `Delay updated — ${link}`);
     await refreshMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
@@ -398,11 +468,13 @@ async function cancelMessage(messageId = ui.manageMessageId.value.trim()) {
   if (!messageId) throw new Error("Message ID required");
 
   setBusy(ui.cancelMessage, true);
-  setStatus(ui.manageStatus, "Canceling message...");
   try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.manageStatus, `Canceling message ${gas}`.trim());
     const tx = await state.vault.cancelMessage(messageId);
-    await tx.wait();
-    setStatus(ui.manageStatus, "Message canceled");
+    const receipt = await tx.wait();
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.manageStatus, `Message canceled — ${link}`);
     await refreshMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
@@ -414,9 +486,12 @@ async function cancelMessage(messageId = ui.manageMessageId.value.trim()) {
 async function claimMessage(messageId) {
   requireContracts();
   try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.manageStatus, `Claiming message ${gas}`.trim());
     const tx = await state.vault.claimMessage(messageId);
-    await tx.wait();
-    setStatus(ui.manageStatus, "Message claimed");
+    const receipt = await tx.wait();
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.manageStatus, `Message claimed — ${link}`);
     await refreshMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
@@ -439,8 +514,14 @@ async function refreshAll() {
 }
 
 function readableError(error) {
-  const reason = error?.shortMessage || error?.reason || error?.message || "Transaction failed";
-  return reason.replace(/^execution reverted: /, "");
+  const msg = error?.shortMessage || error?.reason || error?.message || "Transaction failed";
+
+  // Catch insufficient funds and surface a clear message
+  if (msg.includes("insufficient funds") || msg.includes("gas required exceeds")) {
+    return "⚠️ Insufficient RITUAL balance for gas — fund your wallet and try again";
+  }
+
+  return msg.replace(/^execution reverted: /, "");
 }
 
 function bind(id, handler) {
@@ -472,7 +553,16 @@ function bindEvents() {
 
   if (window.ethereum) {
     window.ethereum.on("accountsChanged", () => window.location.reload());
-    window.ethereum.on("chainChanged", () => window.location.reload());
+    window.ethereum.on("chainChanged", (chainId) => {
+      if (chainId !== RITUAL_CHAIN_HEX) {
+        const warning = document.getElementById("chain-warning");
+        if (warning) warning.style.display = "flex";
+        setText(ui.network, "Wrong network");
+        setStatus(ui.signalStatus, "Switch to Ritual Chain (ID 1979) in your wallet");
+      } else {
+        window.location.reload();
+      }
+    });
   }
 }
 
