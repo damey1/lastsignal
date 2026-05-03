@@ -114,7 +114,7 @@ contract MessageVault {
     ) external returns (bytes32 messageId) {
         require(recipient != address(0), "Invalid recipient");
         require(bytes(encryptedContent).length > 0, "Message cannot be empty");
-        require(inactivityUnlock >= 7 days, "Minimum unlock threshold is 7 days");
+        require(inactivityUnlock >= 2 days, "Minimum unlock threshold is 2 days");
 
         _requireHeartbeat(msg.sender);
 
@@ -211,7 +211,7 @@ contract MessageVault {
         bytes32 messageId,
         uint256 inactivityUnlock
     ) external {
-        require(inactivityUnlock >= 7 days, "Minimum unlock threshold is 7 days");
+        require(inactivityUnlock >= 2 days, "Minimum unlock threshold is 2 days");
 
         Message storage m = messages[messageId];
         _requireOwnedLockedMessage(m);

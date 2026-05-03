@@ -68,7 +68,7 @@ describe("MessageVault — Heartbeat-gated vault", function () {
     await checkIn.connect(owner).checkIn();
     const messageId = await sealMessage();
 
-    await time.increase(13 * 60 * 60);
+    await time.increase(25 * 60 * 60); // 25h gap — past the 24h rolling window
     await checkIn.connect(owner).checkIn();
 
     await time.increase(SEVEN_DAYS - 60);

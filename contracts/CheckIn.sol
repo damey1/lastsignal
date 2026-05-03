@@ -67,7 +67,7 @@ contract CheckIn {
 
     // ── ERRORS ──
 
-    error AlreadyCheckedInToday();
+    error AlreadyCheckedIn();
     error UserNotFound();
 
     // ── MAIN FUNCTIONS ──
@@ -87,8 +87,8 @@ contract CheckIn {
             signal.longestStreak = 1;
             allUsers.push(msg.sender);
         } else {
-            if (_dayOf(block.timestamp) == _dayOf(signal.lastCheckIn)) {
-                revert AlreadyCheckedInToday();
+            if (block.timestamp < signal.lastCheckIn + 1 days) {
+                revert AlreadyCheckedIn();
             }
 
             // Check if streak is still alive (within 48hr window)
@@ -158,7 +158,7 @@ contract CheckIn {
      */
     function canCheckIn(address user) external view returns (bool) {
         if (!signals[user].exists) return true;
-        return _dayOf(block.timestamp) > _dayOf(signals[user].lastCheckIn);
+        return block.timestamp >= signals[user].lastCheckIn + 1 days;
     }
 
     /**
@@ -219,10 +219,6 @@ contract CheckIn {
 
         if (silence > STREAK_WINDOW && score > 60) return 60;
         return _min(score, 100);
-    }
-
-    function _dayOf(uint256 timestamp) private pure returns (uint256) {
-        return timestamp / 1 days;
     }
 
     function _min(uint256 a, uint256 b) private pure returns (uint256) {
