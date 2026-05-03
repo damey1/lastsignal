@@ -5,6 +5,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 describe("CheckIn — Heartbeat Contract", function () {
   let checkIn;
   let owner, user1, user2;
+  const DAY = 24 * 60 * 60;
 
   beforeEach(async () => {
     [owner, user1, user2] = await ethers.getSigners();
@@ -12,18 +13,37 @@ describe("CheckIn — Heartbeat Contract", function () {
     checkIn = await CheckIn.deploy();
   });
 
+  async function futureDay(offset = 1) {
+    const latest = await time.latest();
+    return (Math.floor(latest / DAY) + offset) * DAY;
+  }
+
+  async function buildDailyStreak(user, days) {
+    const day = await futureDay();
+    for (let i = 0; i < days; i++) {
+      await time.setNextBlockTimestamp(day + i * DAY + 12 * 60 * 60);
+      await checkIn.connect(user).checkIn();
+    }
+  }
+
   describe("First check-in", () => {
     it("should register a new user on first check-in", async () => {
       await checkIn.connect(user1).checkIn();
       const signal = await checkIn.getSignal(user1.address);
       expect(signal.exists).to.be.true;
       expect(signal.totalCheckIns).to.equal(1);
+      expect(signal.currentStreak).to.equal(1);
+      expect(signal.longestStreak).to.equal(1);
     });
 
     it("should emit HeartBeat event", async () => {
-      await expect(checkIn.connect(user1).checkIn())
+      const tx = await checkIn.connect(user1).checkIn();
+      const receipt = await tx.wait();
+      const block = await ethers.provider.getBlock(receipt.blockNumber);
+
+      await expect(tx)
         .to.emit(checkIn, "HeartBeat")
-        .withArgs(user1.address, await time.latest() + 1, 0, 1);
+        .withArgs(user1.address, block.timestamp, 1, 1);
     });
 
     it("should track total users", async () => {
@@ -35,11 +55,14 @@ describe("CheckIn — Heartbeat Contract", function () {
 
   describe("Streak tracking", () => {
     it("should build streak on consecutive check-ins", async () => {
+      const day = await futureDay();
+      await time.setNextBlockTimestamp(day + 10 * 60 * 60);
       await checkIn.connect(user1).checkIn();
-      await time.increase(13 * 60 * 60); // 13 hours later
+      await time.setNextBlockTimestamp(day + DAY + 9 * 60 * 60);
       await checkIn.connect(user1).checkIn();
       const signal = await checkIn.getSignal(user1.address);
-      expect(signal.currentStreak).to.equal(1);
+      expect(signal.currentStreak).to.equal(2);
+      expect(signal.longestStreak).to.equal(2);
     });
 
     it("should break streak after 48 hours", async () => {
@@ -50,10 +73,26 @@ describe("CheckIn — Heartbeat Contract", function () {
       expect(signal.currentStreak).to.equal(1); // reset to 1
     });
 
-    it("should prevent check-in within 12 hour window", async () => {
+    it("should prevent more than one check-in per UTC day", async () => {
+      const day = await futureDay();
+      await time.setNextBlockTimestamp(day + 1 * 60 * 60);
       await checkIn.connect(user1).checkIn();
+      await time.setNextBlockTimestamp(day + 23 * 60 * 60);
       await expect(checkIn.connect(user1).checkIn())
-        .to.be.revertedWith("Already checked in recently. Come back later.");
+        .to.be.revertedWithCustomError(checkIn, "AlreadyCheckedInToday");
+    });
+
+    it("should allow the next check-in on the next UTC day", async () => {
+      const day = await futureDay();
+      await time.setNextBlockTimestamp(day + 23 * 60 * 60);
+      await checkIn.connect(user1).checkIn();
+
+      await time.increaseTo(day + DAY + 1);
+      expect(await checkIn.canCheckIn(user1.address)).to.equal(true);
+
+      await checkIn.connect(user1).checkIn();
+      const signal = await checkIn.getSignal(user1.address);
+      expect(signal.totalCheckIns).to.equal(2);
     });
   });
 
@@ -76,6 +115,52 @@ describe("CheckIn — Heartbeat Contract", function () {
       await time.increase(5 * 24 * 60 * 60); // 5 days
       const silence = await checkIn.silenceDuration(user1.address);
       expect(silence).to.be.closeTo(5 * 24 * 60 * 60, 5);
+    });
+  });
+
+  describe("Signal gamification", () => {
+    it("should return empty defaults for users without a heartbeat", async () => {
+      expect(await checkIn.signalLevel(user1.address)).to.equal(0);
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(0);
+      expect(await checkIn.signalScore(user1.address)).to.equal(0);
+    });
+
+    it("should classify new, stable, strong, and legendary streak tiers", async () => {
+      await checkIn.connect(user1).checkIn();
+      expect(await checkIn.signalLevel(user1.address)).to.equal(1);
+
+      await buildDailyStreak(user2, 7);
+      expect(await checkIn.signalLevel(user2.address)).to.equal(2);
+
+      await buildDailyStreak(owner, 14);
+      expect(await checkIn.signalLevel(owner.address)).to.equal(3);
+
+      const [, , , user3] = await ethers.getSigners();
+      await buildDailyStreak(user3, 30);
+      expect(await checkIn.signalLevel(user3.address)).to.equal(4);
+    });
+
+    it("should report active, watch, and ghost risk levels", async () => {
+      await checkIn.connect(user1).checkIn();
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(1);
+
+      await time.increase(3 * DAY);
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(2);
+
+      await time.increase(28 * DAY);
+      expect(await checkIn.ghostRisk(user1.address)).to.equal(3);
+    });
+
+    it("should calculate signal score and cap stale signals", async () => {
+      await buildDailyStreak(user1, 7);
+      const activeScore = await checkIn.signalScore(user1.address);
+      expect(activeScore).to.be.greaterThan(20);
+
+      await time.increase(3 * DAY);
+      expect(await checkIn.signalScore(user1.address)).to.be.at.most(60);
+
+      await time.increase(28 * DAY);
+      expect(await checkIn.signalScore(user1.address)).to.equal(0);
     });
   });
 });

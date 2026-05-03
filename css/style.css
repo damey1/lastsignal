@@ -111,6 +111,20 @@
     text-transform: uppercase;
   }
 
+  .nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .nav-link {
+    text-decoration: none;
+  }
+
+  .nav-link:hover {
+    color: var(--green);
+  }
+
   /* ── HERO ── */
   .hero {
     min-height: 100vh;
