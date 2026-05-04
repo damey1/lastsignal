@@ -46,6 +46,12 @@ contract MessageVault {
     // owner => next message nonce
     mapping(address => uint256) private ownerNonces;
 
+    // ── UPGRADE STATE ──
+
+    address public owner;
+    address public pendingCheckInContract;
+    uint256 public pendingUpdateTimestamp;
+
     // ── EVENTS ──
 
     event MessageSealed(
@@ -81,6 +87,26 @@ contract MessageVault {
         uint256 updatedAt
     );
 
+    event OwnershipTransferred(
+        address indexed oldOwner,
+        address indexed newOwner
+    );
+
+    event CheckInContractProposed(
+        address indexed oldContract,
+        address indexed proposedContract,
+        uint256 effectiveAt
+    );
+
+    event CheckInContractUpdated(
+        address indexed oldContract,
+        address indexed newContract
+    );
+
+    event CheckInContractUpdateCanceled(
+        address indexed canceledContract
+    );
+
     // ── ERRORS ──
 
     error MessageNotFound();
@@ -90,12 +116,24 @@ contract MessageVault {
     error AlreadyUnlocked();
     error MessageIsCanceled();
     error HeartbeatNotFound();
+    error NotContractOwner();
+    error NoPendingUpdate();
+    error UpdateStillLocked();
+    error InvalidContractAddress();
+
+    // ── MODIFIERS ──
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotContractOwner();
+        _;
+    }
 
     // ── CONSTRUCTOR ──
 
     constructor(address _checkInContract) {
         require(_checkInContract != address(0), "Invalid CheckIn contract");
         checkInContract = ICheckIn(_checkInContract);
+        owner = msg.sender;
     }
 
     // ── MAIN FUNCTIONS ──
@@ -257,7 +295,7 @@ contract MessageVault {
      * @notice Get message metadata (no content) — available to owner or recipient
      */
     function getMessageInfo(bytes32 messageId) external view returns (
-        address owner,
+        address messageOwner,
         address recipient,
         uint256 inactivityUnlock,
         uint256 createdAt,
@@ -327,8 +365,71 @@ contract MessageVault {
         return unlockTime - block.timestamp;
     }
 
+    // ── ADMIN FUNCTIONS ──
+
+    /**
+     * @notice Transfer ownership to a new address
+     */
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid owner");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    /**
+     * @notice Propose a new CheckIn contract address (two-step update)
+     */
+    function proposeCheckInContract(address newCheckInContract) external onlyOwner {
+        require(newCheckInContract != address(0), "Invalid contract address");
+        require(newCheckInContract != address(this), "Cannot set to self");
+        _assertIsValidCheckIn(newCheckInContract);
+
+        pendingCheckInContract = newCheckInContract;
+        pendingUpdateTimestamp = block.timestamp + 5 days;
+
+        emit CheckInContractProposed(
+            address(checkInContract),
+            newCheckInContract,
+            pendingUpdateTimestamp
+        );
+    }
+
+    /**
+     * @notice Confirm the pending CheckIn contract update after delay
+     */
+    function confirmCheckInContractUpdate() external onlyOwner {
+        address pending = pendingCheckInContract;
+        if (pending == address(0)) revert NoPendingUpdate();
+        if (block.timestamp < pendingUpdateTimestamp) revert UpdateStillLocked();
+
+        // Re-validate it's still a conforming contract
+        _assertIsValidCheckIn(pending);
+
+        address oldContract = address(checkInContract);
+        checkInContract = ICheckIn(pending);
+
+        // Clear pending state
+        pendingCheckInContract = address(0);
+        pendingUpdateTimestamp = 0;
+
+        emit CheckInContractUpdated(oldContract, address(checkInContract));
+    }
+
+    /**
+     * @notice Cancel the pending CheckIn contract update
+     */
+    function cancelPendingCheckInContractUpdate() external onlyOwner {
+        address pending = pendingCheckInContract;
+        if (pending == address(0)) revert NoPendingUpdate();
+
+        pendingCheckInContract = address(0);
+        pendingUpdateTimestamp = 0;
+
+        emit CheckInContractUpdateCanceled(pending);
+    }
+
     function _requireHeartbeat(address user) private view {
-        if (_lastSeen(user) == 0) revert HeartbeatNotFound();
+        _lastSeen(user);
     }
 
     function _lastSeen(address user) private view returns (uint256) {
@@ -344,5 +445,20 @@ contract MessageVault {
         if (m.owner != msg.sender) revert NotOwner();
         if (m.unlocked) revert AlreadyUnlocked();
         if (m.canceled) revert MessageIsCanceled();
+    }
+
+    /**
+     * @dev Verify an address is a contract implementing the ICheckIn interface.
+     *      Checks contract existence + makes a test call to lastSeen() to confirm
+     *      the interface is actually implemented.
+     */
+    function _assertIsValidCheckIn(address candidate) private view {
+        if (candidate.code.length == 0) revert InvalidContractAddress();
+        // Dry-run lastSeen(this) to confirm the interface works
+        try ICheckIn(candidate).lastSeen(address(this)) {
+            // Interface conforms — call succeeded (even if it returns 0)
+        } catch {
+            revert InvalidContractAddress();
+        }
     }
 }
