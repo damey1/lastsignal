@@ -183,7 +183,10 @@ function setStatus(node, text) {
   setText(node, text);
 }
 
+let _configReady = null; // promise that resolves when loadConfig finishes
+
 async function loadConfig() {
+  _configReady = (async () => {
   // Source 1: deployed.json (written by deploy script)
   let deployed = {};
   try {
@@ -202,6 +205,7 @@ async function loadConfig() {
   ui.checkInAddress.value = (savedCheckIn && ethers.isAddress(savedCheckIn)) ? savedCheckIn : defaultCheckIn;
   ui.vaultAddress.value = (savedVault && ethers.isAddress(savedVault)) ? savedVault : defaultVault;
   configureContracts();
+  })().catch(() => {});
 }
 
 function configureContracts() {
@@ -293,6 +297,8 @@ async function connectWallet() {
     return;
   }
 
+  // Wait for deployed.json to load before configuring contracts
+  if (_configReady) await _configReady;
   configureContracts();
   await refreshAll();
 }
