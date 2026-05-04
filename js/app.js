@@ -368,9 +368,11 @@ async function sealMessage() {
   const plaintext = ui.plaintextMessage.value.trim();
   const passphrase = ui.sealPassphrase.value.trim();
 
+  const unlockDays = Number(ui.unlockDays.value);
   if (!ethers.isAddress(recipient)) throw new Error("Enter a valid recipient address");
   if (!plaintext) throw new Error("Write a message to seal");
   if (!passphrase) throw new Error("Set a passphrase — share this with the recipient off-chain");
+  if (unlockDays < 2 || !Number.isFinite(unlockDays)) throw new Error("Minimum unlock delay is 2 days");
 
   setBusy(ui.sealMessage, true);
 
@@ -721,6 +723,27 @@ function bindEvents() {
       } else {
         window.location.reload();
       }
+    });
+  }
+
+  // Show/hide passphrase
+  const togglePw = document.getElementById("toggle-passphrase");
+  const pwInput = document.getElementById("seal-passphrase");
+  if (togglePw && pwInput) {
+    togglePw.addEventListener("click", () => {
+      const isPassword = pwInput.type === "password";
+      pwInput.type = isPassword ? "text" : "password";
+      togglePw.textContent = isPassword ? "🙈" : "👁";
+    });
+  }
+
+  // Live warning on unlock days input
+  const unlockInput = ui.unlockDays;
+  const unlockWarn = document.getElementById("unlock-days-warn");
+  if (unlockInput && unlockWarn) {
+    unlockInput.addEventListener("input", () => {
+      const val = Number(unlockInput.value);
+      unlockWarn.style.display = (val < 2 || !Number.isFinite(val)) ? "block" : "none";
     });
   }
 }
