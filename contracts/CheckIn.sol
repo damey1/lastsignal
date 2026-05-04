@@ -39,6 +39,7 @@ contract CheckIn {
     // ── STATE ──
 
     mapping(address => UserSignal) private signals;
+    mapping(address => bool) private ghostDeclared;
     address[] private allUsers;
 
     uint256 public constant STREAK_WINDOW = 48 hours; // grace window for streak
@@ -65,10 +66,17 @@ contract CheckIn {
         uint256 previousStreak
     );
 
+    event GhostModeEntered(
+        address indexed user,
+        uint256 lastSeen,
+        uint256 declaredAt
+    );
+
     // ── ERRORS ──
 
-    error AlreadyCheckedInToday();
+    error AlreadyCheckedIn();
     error UserNotFound();
+    error NotGhostYet();
 
     // ── MAIN FUNCTIONS ──
 
@@ -87,8 +95,8 @@ contract CheckIn {
             signal.longestStreak = 1;
             allUsers.push(msg.sender);
         } else {
-            if (_dayOf(block.timestamp) == _dayOf(signal.lastCheckIn)) {
-                revert AlreadyCheckedInToday();
+            if (block.timestamp < signal.lastCheckIn + 1 days) {
+                revert AlreadyCheckedIn();
             }
 
             // Check if streak is still alive (within 48hr window)
@@ -107,6 +115,7 @@ contract CheckIn {
 
         signal.lastCheckIn = block.timestamp;
         signal.totalCheckIns += 1;
+        ghostDeclared[msg.sender] = false;
 
         emit HeartBeat(
             msg.sender,
@@ -154,11 +163,11 @@ contract CheckIn {
     }
 
     /**
-     * @notice Check if user is eligible to check in (next UTC day reached)
+     * @notice Check if user is eligible to check in (24-hour rolling window)
      */
     function canCheckIn(address user) external view returns (bool) {
         if (!signals[user].exists) return true;
-        return _dayOf(block.timestamp) > _dayOf(signals[user].lastCheckIn);
+        return block.timestamp >= signals[user].lastCheckIn + 1 days;
     }
 
     /**
@@ -166,6 +175,28 @@ contract CheckIn {
      */
     function totalUsers() external view returns (uint256) {
         return allUsers.length;
+    }
+
+    /**
+     * @notice Get the next eligible check-in timestamp for a user
+     */
+    function nextCheckInTime(address user) external view returns (uint256) {
+        if (!signals[user].exists) return 0;
+        return signals[user].lastCheckIn + 1 days;
+    }
+
+    /**
+     * @notice Emit a ghost mode event for a user once they've gone dark
+     */
+    function declareGhost(address user) external returns (bool) {
+        UserSignal storage signal = signals[user];
+        if (!signal.exists) revert UserNotFound();
+        if (block.timestamp <= signal.lastCheckIn + GHOST_THRESHOLD) revert NotGhostYet();
+        if (ghostDeclared[user]) return false;
+
+        ghostDeclared[user] = true;
+        emit GhostModeEntered(user, signal.lastCheckIn, block.timestamp);
+        return true;
     }
 
     /**
@@ -219,10 +250,6 @@ contract CheckIn {
 
         if (silence > STREAK_WINDOW && score > 60) return 60;
         return _min(score, 100);
-    }
-
-    function _dayOf(uint256 timestamp) private pure returns (uint256) {
-        return timestamp / 1 days;
     }
 
     function _min(uint256 a, uint256 b) private pure returns (uint256) {

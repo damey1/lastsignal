@@ -326,19 +326,62 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   padding: 10px 16px;
   background: #b84a4a;
   color: #fff;
   font-family: "DM Mono", monospace;
   font-size: 13px;
   letter-spacing: 0.02em;
+  flex-wrap: wrap;
 }
 
 .chain-warning strong {
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.chain-switch-btn {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  padding: 5px 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: background 0.2s;
+}
+
+.chain-switch-btn:hover {
+  background: rgba(255,255,255,0.25);
+}
+
+/* ── LOADING SPINNER ── */
+
+.app-button.is-loading {
+  position: relative;
+  pointer-events: none;
+}
+
+.app-button.is-loading::after {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 8px;
+  border: 2px solid rgba(77, 217, 172, 0.3);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: btn-spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 560px) {

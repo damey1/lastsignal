@@ -58,7 +58,7 @@ describe("CheckIn — Heartbeat Contract", function () {
       const day = await futureDay();
       await time.setNextBlockTimestamp(day + 10 * 60 * 60);
       await checkIn.connect(user1).checkIn();
-      await time.setNextBlockTimestamp(day + DAY + 9 * 60 * 60);
+      await time.setNextBlockTimestamp(day + DAY + 11 * 60 * 60); // 25h gap
       await checkIn.connect(user1).checkIn();
       const signal = await checkIn.getSignal(user1.address);
       expect(signal.currentStreak).to.equal(2);
@@ -73,26 +73,29 @@ describe("CheckIn — Heartbeat Contract", function () {
       expect(signal.currentStreak).to.equal(1); // reset to 1
     });
 
-    it("should prevent more than one check-in per UTC day", async () => {
-      const day = await futureDay();
-      await time.setNextBlockTimestamp(day + 1 * 60 * 60);
+    it("should prevent more than one check-in within 24 hours", async () => {
       await checkIn.connect(user1).checkIn();
-      await time.setNextBlockTimestamp(day + 23 * 60 * 60);
+      await time.increase(12 * 60 * 60); // 12 hours later
       await expect(checkIn.connect(user1).checkIn())
-        .to.be.revertedWithCustomError(checkIn, "AlreadyCheckedInToday");
+        .to.be.revertedWithCustomError(checkIn, "AlreadyCheckedIn");
     });
 
-    it("should allow the next check-in on the next UTC day", async () => {
-      const day = await futureDay();
-      await time.setNextBlockTimestamp(day + 23 * 60 * 60);
+    it("should allow the next check-in after 24 hours", async () => {
       await checkIn.connect(user1).checkIn();
 
-      await time.increaseTo(day + DAY + 1);
+      await time.increase(24 * 60 * 60 + 1); // 24h + 1 second
       expect(await checkIn.canCheckIn(user1.address)).to.equal(true);
 
       await checkIn.connect(user1).checkIn();
       const signal = await checkIn.getSignal(user1.address);
       expect(signal.totalCheckIns).to.equal(2);
+    });
+
+    it("should expose next eligible check-in time", async () => {
+      await checkIn.connect(user1).checkIn();
+      const signal = await checkIn.getSignal(user1.address);
+      expect(await checkIn.nextCheckInTime(user1.address))
+        .to.equal(signal.lastCheckIn + BigInt(DAY));
     });
   });
 
@@ -106,6 +109,30 @@ describe("CheckIn — Heartbeat Contract", function () {
     it("should not be ghost if recently active", async () => {
       await checkIn.connect(user1).checkIn();
       expect(await checkIn.isGhost(user1.address, 0)).to.be.false;
+    });
+
+    it("should emit GhostModeEntered once after threshold", async () => {
+      await checkIn.connect(user1).checkIn();
+      await time.increase(31 * DAY);
+
+      await expect(checkIn.declareGhost(user1.address))
+        .to.emit(checkIn, "GhostModeEntered");
+    });
+
+    it("should not emit ghost event before threshold", async () => {
+      await checkIn.connect(user1).checkIn();
+      await time.increase(10 * DAY);
+      await expect(checkIn.declareGhost(user1.address))
+        .to.be.revertedWithCustomError(checkIn, "NotGhostYet");
+    });
+
+    it("should return false when ghost event already declared", async () => {
+      await checkIn.connect(user1).checkIn();
+      await time.increase(31 * DAY);
+      await expect(checkIn.declareGhost(user1.address))
+        .to.emit(checkIn, "GhostModeEntered");
+      await expect(checkIn.declareGhost(user1.address))
+        .to.not.emit(checkIn, "GhostModeEntered");
     });
   });
 

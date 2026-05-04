@@ -13,7 +13,8 @@
 <canvas id="bg-canvas"></canvas>
 
 <div id="chain-warning" class="chain-warning" style="display:none">
-  ⚠️ Wrong network — please switch to <strong>Ritual Chain (ID 1979)</strong>
+  <span>⚠️ Wrong network — please switch to <strong>Ritual Chain (ID 1979)</strong></span>
+  <button id="switch-chain" class="chain-switch-btn">Switch →</button>
 </div>
 
 <nav>
@@ -40,10 +41,10 @@
         <button id="save-contracts" class="app-button app-button-small">Save</button>
       </div>
       <label class="field-label" for="checkin-address">CheckIn address</label>
-      <input id="checkin-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
+      <input id="checkin-address" class="app-input" type="text" autocomplete="off" placeholder="Paste CheckIn address after deploy">
       <label class="field-label" for="vault-address">MessageVault address</label>
-      <input id="vault-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
-      <p id="config-status" class="muted-line">No contracts loaded</p>
+      <input id="vault-address" class="app-input" type="text" autocomplete="off" placeholder="Paste MessageVault address after deploy">
+      <p id="config-status" class="muted-line">No contracts loaded — deploy first or paste addresses</p>
     </div>
 
     <div class="app-panel signal-panel">
@@ -92,8 +93,10 @@
       <input id="recipient-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
       <label class="field-label" for="unlock-days">Unlock delay in days</label>
       <input id="unlock-days" class="app-input" type="number" min="7" step="1" value="30">
-      <label class="field-label" for="encrypted-content">Encrypted content</label>
-      <textarea id="encrypted-content" class="app-textarea" rows="6" placeholder="encrypted://..."></textarea>
+      <label class="field-label" for="plaintext-message">Your message</label>
+      <textarea id="plaintext-message" class="app-textarea" rows="4" placeholder="Write the message for your recipient..."></textarea>
+      <label class="field-label" for="seal-passphrase">Secret passphrase <span class="muted-line">(share with recipient)</span></label>
+      <input id="seal-passphrase" class="app-input" type="password" autocomplete="off" placeholder="e.g. blue-elephant-42">
       <button id="seal-message" class="app-button">Seal message</button>
       <p id="seal-status" class="muted-line">Heartbeat required before sealing</p>
     </div>
@@ -104,8 +107,8 @@
       </div>
       <label class="field-label" for="manage-message-id">Message ID</label>
       <input id="manage-message-id" class="app-input" type="text" autocomplete="off" placeholder="0x...">
-      <label class="field-label" for="updated-content">New encrypted content</label>
-      <textarea id="updated-content" class="app-textarea" rows="4" placeholder="encrypted://..."></textarea>
+      <label class="field-label" for="updated-content">Plaintext (will be encrypted on rotate)</label>
+      <textarea id="updated-content" class="app-textarea" rows="4" placeholder="Click &#39;Read own&#39; first to decrypt, then edit..."></textarea>
       <label class="field-label" for="updated-unlock-days">New unlock delay in days</label>
       <input id="updated-unlock-days" class="app-input" type="number" min="7" step="1" value="30">
       <div class="split-actions">
@@ -137,6 +140,7 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js"></script>
 <script src="js/main.js" defer></script>
 <script src="js/app.js" defer></script>
 </body>
