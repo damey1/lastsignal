@@ -4,7 +4,10 @@ const CHECKIN_ABI = [
   "function canCheckIn(address user) external view returns (bool)",
   "function signalLevel(address user) external view returns (uint8)",
   "function ghostRisk(address user) external view returns (uint8)",
-  "function signalScore(address user) external view returns (uint256)"
+  "function signalScore(address user) external view returns (uint256)",
+  "function nextCheckInTime(address user) external view returns (uint256)",
+  "error AlreadyCheckedIn()",
+  "error UserNotFound()"
 ];
 
 const VAULT_ABI = [
@@ -30,55 +33,115 @@ const riskLabels = ["Unknown", "Active", "Watch", "Ghost"];
 const daySeconds = 24 * 60 * 60;
 const ENC_VERSION = 1;
 
-// ── ENCRYPTION (tweetnacl) ──
+// ── ENCODING HELPERS (browser-native, no nacl.util dependency) ──
+const _textEnc = new TextEncoder();
+const _textDec = new TextDecoder();
+const _toBytes = (s) => _textEnc.encode(s);
+const _fromBytes = (a) => _textDec.decode(a);
 
-async function getEncryptionPubKey() {
-  if (!window.ethereum || !state.account) throw new Error("Connect wallet first");
-  if (state.encPubKey) return state.encPubKey;
-  state.encPubKey = await window.ethereum.request({
-    method: "eth_getEncryptionPublicKey",
-    params: [state.account],
-  });
-  return state.encPubKey;
+// Chunk-safe base64 — avoids spread-operator argument limit
+function _toB64(a) {
+  const bytes = new Uint8Array(a);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function _fromB64(s) {
+  const bin = atob(s);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
-function _deriveKey(passphrase) {
-  const pw = nacl.util.decodeUTF8(passphrase);
+// ── ENCRYPTION (tweetnacl + native encoding) ──
+
+// Deterministic key derived from a personal_sign signature.
+// Same account + same message = same key every time.
+const OWNER_SIGN_MSG = "LastSignal heartbeat encryption key";
+
+async function _deriveOwnerKey() {
+  if (!state.signer) throw new Error("Connect wallet first");
+  if (state.ownerKey) return state.ownerKey;
+  // signMessage uses personal_sign (EIP-191), deterministic per RFC 6979
+  const sig = await state.signer.signMessage(OWNER_SIGN_MSG);
+  // Hash the raw signature bytes (65 bytes) to get a 32-byte key
+  const hash = ethers.keccak256(sig);
+  state.ownerKey = new Uint8Array(ethers.getBytes(hash).slice(0, nacl.secretbox.keyLength));
+  return state.ownerKey;
+}
+
+// PBKDF2-SHA512 · 210 000 iterations (same tier as MetaMask)
+const PBKDF2_ITER = 210000;
+
+async function _deriveKeyPbkdf2(passphrase, salt) {
+  const pwEnc = new TextEncoder().encode(passphrase);
+  const baseKey = await crypto.subtle.importKey(
+    "raw", pwEnc, { name: "PBKDF2" }, false, ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: PBKDF2_ITER, hash: "SHA-512" },
+    baseKey, 256 // 32 bytes
+  );
+  return new Uint8Array(bits);
+}
+
+function _deriveKeyLegacy(passphrase) {
+  // Old-style key (backward compat — SHA-512 hash, no salt)
+  const pw = _toBytes(passphrase);
   return nacl.hash(pw).slice(0, nacl.secretbox.keyLength);
 }
 
-function encryptForOwner(plaintext, pubKeyB64) {
-  const theirPub = nacl.util.decodeBase64(pubKeyB64);
-  const ephem = nacl.box.keyPair();
-  const nonce = nacl.randomBytes(nacl.box.nonceLength);
-  const msg = nacl.util.decodeUTF8(plaintext);
-  const ct = nacl.box(msg, nonce, theirPub, ephem.secretKey);
-  return {
-    version: "x25519-xsalsa20-poly1305",
-    nonce: nacl.util.encodeBase64(nonce),
-    ephemPublicKey: nacl.util.encodeBase64(ephem.publicKey),
-    ciphertext: nacl.util.encodeBase64(ct),
-  };
-}
-
-function encryptForRecipient(plaintext, passphrase) {
-  const key = _deriveKey(passphrase);
+async function encryptForOwner(plaintext) {
+  const key = await _deriveOwnerKey();
   const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
-  const msg = nacl.util.decodeUTF8(plaintext);
+  const msg = _toBytes(plaintext);
   const ct = nacl.secretbox(msg, nonce, key);
   return {
-    nonce: nacl.util.encodeBase64(nonce),
-    ciphertext: nacl.util.encodeBase64(ct),
+    nonce: _toB64(nonce),
+    ciphertext: _toB64(ct),
   };
 }
 
-function decryptWithPassphrase(payload, passphrase) {
-  const key = _deriveKey(passphrase);
-  const nonce = nacl.util.decodeBase64(payload.nonce);
-  const ct = nacl.util.decodeBase64(payload.ciphertext);
+async function decryptForOwner(payload) {
+  const key = await _deriveOwnerKey();
+  const nonce = _fromB64(payload.nonce);
+  const ct = _fromB64(payload.ciphertext);
+  const plain = nacl.secretbox.open(ct, nonce, key);
+  if (!plain) throw new Error("Decryption failed — wrong account or corrupted message");
+  return _fromBytes(plain);
+}
+
+async function encryptForRecipient(plaintext, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await _deriveKeyPbkdf2(passphrase, salt);
+  const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+  const msg = _toBytes(plaintext);
+  const ct = nacl.secretbox(msg, nonce, key);
+  return {
+    v: 2, // PBKDF2 version
+    nonce: _toB64(nonce),
+    ciphertext: _toB64(ct),
+    salt: _toB64(salt),
+  };
+}
+
+async function decryptWithPassphrase(payload, passphrase) {
+  const nonce = _fromB64(payload.nonce);
+  const ct = _fromB64(payload.ciphertext);
+
+  let key;
+  if (payload.salt) {
+    // v2 — PBKDF2
+    const salt = _fromB64(payload.salt);
+    key = await _deriveKeyPbkdf2(passphrase, salt);
+  } else {
+    // v1 legacy — SHA-512 hash
+    key = _deriveKeyLegacy(passphrase);
+  }
+
   const plain = nacl.secretbox.open(ct, nonce, key);
   if (!plain) throw new Error("Wrong passphrase or corrupted message");
-  return nacl.util.encodeUTF8(plain);
+  return _fromBytes(plain);
 }
 
 function isEncryptedPayload(str) {
@@ -94,7 +157,7 @@ const state = {
   account: null,
   checkIn: null,
   vault: null,
-  encPubKey: null,
+  ownerKey: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -153,8 +216,10 @@ function secondsToDays(seconds) {
 }
 
 function formatDate(timestamp) {
-  const value = asNumber(timestamp);
+  let value = asNumber(timestamp);
   if (!value) return "--";
+  // Auto-detect ms vs seconds (seconds are < 1e12 for ~33,000 years)
+  if (value > 1e12) value = Math.floor(value / 1000);
   return new Date(value * 1000).toLocaleString();
 }
 
@@ -175,8 +240,9 @@ function setText(node, text) {
 
 function setBusy(button, busy) {
   if (!button) return;
-  button.disabled = busy;
   button.classList.toggle("is-loading", busy);
+  if (!busy) return; // don't re-enable — caller decides disabled state
+  button.disabled = true;
 }
 
 function setStatus(node, text) {
@@ -198,12 +264,12 @@ async function loadConfig() {
   const savedCheckIn = localStorage.getItem("lastsignal.checkIn");
   const savedVault = localStorage.getItem("lastsignal.vault");
 
-  // Priority: user-saved > deployed.json > fallback
+  // Priority: deployed.json wins on page load. User-saved only applies after clicking Save.
   const defaultCheckIn = deployed.checkIn || "";
   const defaultVault = deployed.messageVault || "";
 
-  ui.checkInAddress.value = (savedCheckIn && ethers.isAddress(savedCheckIn)) ? savedCheckIn : defaultCheckIn;
-  ui.vaultAddress.value = (savedVault && ethers.isAddress(savedVault)) ? savedVault : defaultVault;
+  ui.checkInAddress.value = defaultCheckIn || savedCheckIn || "";
+  ui.vaultAddress.value = defaultVault || savedVault || "";
   configureContracts();
   })().catch(() => {});
 }
@@ -278,7 +344,7 @@ async function connectWallet() {
   await state.provider.send("eth_requestAccounts", []);
   state.signer = await state.provider.getSigner();
   state.account = await state.signer.getAddress();
-  state.encPubKey = null; // clear cached encryption key for new account
+  state.ownerKey = null; // clear cached owner key for new account
 
   const network = await state.provider.getNetwork();
   const onCorrectChain = Number(network.chainId) === RITUAL_CHAIN_ID;
@@ -304,39 +370,69 @@ async function connectWallet() {
 }
 
 async function refreshSignal() {
+  // Clear any stale countdown timer
+  if (window._cdTimer) { clearInterval(window._cdTimer); window._cdTimer = null; }
+
   requireContracts();
 
   try {
-    const [signal, canCheckIn, level, risk, score] = await Promise.all([
-      state.checkIn.mySignal(),
-      state.checkIn.canCheckIn(state.account),
-      state.checkIn.signalLevel(state.account),
-      state.checkIn.ghostRisk(state.account),
-      state.checkIn.signalScore(state.account)
-    ]);
+    // Individual calls so one RPC error doesn't wipe everything
+    let signal, canCheckIn, level, risk, score;
+    try { signal = await state.checkIn.mySignal(); } catch {}
+    try { canCheckIn = await state.checkIn.canCheckIn(state.account); } catch {}
+    try { level = await state.checkIn.signalLevel(state.account); } catch {}
+    try { risk = await state.checkIn.ghostRisk(state.account); } catch {}
+    try { score = await state.checkIn.signalScore(state.account); } catch {}
+
+    if (!signal) throw new Error("No signal data");
+
+    // Positional access (Result[0..5]) avoids any named-access quirks in ethers v6
+    const lastCheckIn = signal[0], totalCheckIns = signal[1], currentStreak = signal[2],
+          longestStreak = signal[3], joinedAt = signal[4], exists = signal[5];
+
+    // Normalise timestamps — contract may return ms or seconds
+    const _normTs = (v) => { const n = asNumber(v); return n > 1e12 ? Math.floor(n / 1000) : n; };
 
     setText(ui.signalScore, asNumber(score).toString());
     setText(ui.signalLevel, levelLabels[asNumber(level)] || "Unknown");
-    setText(ui.currentStreak, asNumber(signal.currentStreak).toString());
-    setText(ui.longestStreak, asNumber(signal.longestStreak).toString());
-    setText(ui.totalCheckIns, asNumber(signal.totalCheckIns).toString());
+    setText(ui.currentStreak, asNumber(currentStreak).toString());
+    setText(ui.longestStreak, asNumber(longestStreak).toString());
+    setText(ui.totalCheckIns, asNumber(totalCheckIns).toString());
     setText(ui.ghostRisk, riskLabels[asNumber(risk)] || "Unknown");
     if (canCheckIn) {
       setStatus(ui.signalStatus, "Ready for today's heartbeat");
     } else {
-      const nextTime = (asNumber(signal.lastCheckIn) + daySeconds) * 1000;
-      const remaining = Math.max(0, nextTime - Date.now());
+      // Compute next check-in timestamp; fall back to lastCheckIn + 24h
+      const nxt = _normTs(lastCheckIn) + daySeconds;
+      const remaining = Math.max(0, nxt - Math.floor(Date.now() / 1000));
 
-      if (remaining > 0) {
-        const hours = Math.floor(remaining / 3600000);
-        const minutes = Math.floor((remaining % 3600000) / 60000);
-        setStatus(ui.signalStatus, `Next check-in in ${hours}h ${minutes}m`);
-        // Auto-refresh when countdown expires
-        setTimeout(() => { try { refreshSignal(); } catch {} }, remaining + 1000);
+      // Sanity check — if remaining exceeds 30 days something is off
+      if (remaining > 30 * daySeconds) {
+        setStatus(ui.signalStatus, `Last seen ${formatDate(lastCheckIn)}`);
+      } else if (remaining > 0) {
+        // Clear any previous countdown timer before starting a new one
+        if (window._cdTimer) clearInterval(window._cdTimer);
+        const _updateCountdown = () => {
+          const s = Math.max(0, Math.floor(nxt - Date.now() / 1000));
+          const h = Math.floor(s / 3600);
+          const m = Math.floor((s % 3600) / 60);
+          setStatus(ui.signalStatus, `Next check-in in ${h > 0 ? `${h}h ${m}m` : `${m}m`}`);
+        };
+        _updateCountdown();
+        window._cdTimer = setInterval(() => {
+          if (Date.now() / 1000 >= nxt) {
+            clearInterval(window._cdTimer);
+            window._cdTimer = null;
+            try { refreshSignal(); } catch {}
+          } else {
+            _updateCountdown();
+          }
+        }, 30000);
       } else {
         setStatus(ui.signalStatus, "Ready for today's heartbeat");
       }
     }
+    console.log("[refreshSignal] canCheckIn:", canCheckIn, "lastCheckIn:", asNumber(lastCheckIn), "now:", Math.floor(Date.now()/1000));
     ui.checkInButton.disabled = !canCheckIn;
   } catch (error) {
     setText(ui.signalScore, "0");
@@ -345,8 +441,8 @@ async function refreshSignal() {
     setText(ui.longestStreak, "0");
     setText(ui.totalCheckIns, "0");
     setText(ui.ghostRisk, "Unknown");
-    ui.checkInButton.disabled = false;
     setStatus(ui.signalStatus, "No heartbeat recorded");
+    // Don't enable the button — leave it in the last known state
   }
 }
 
@@ -360,10 +456,12 @@ async function sendCheckIn() {
     const receipt = await tx.wait();
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.signalStatus, `Heartbeat confirmed — ${link}`);
+    setBusy(ui.checkInButton, false);
     await refreshAll();
   } catch (error) {
     setStatus(ui.signalStatus, readableError(error));
-  } finally {
+    // Refresh first to re-compute disabled state, then re-enable
+    try { await refreshSignal(); } catch {}
     setBusy(ui.checkInButton, false);
   }
 }
@@ -383,13 +481,12 @@ async function sealMessage() {
   setBusy(ui.sealMessage, true);
 
   try {
-    // Step 1 — get owner's encryption public key (MetaMask popup)
-    setStatus(ui.sealStatus, "Requesting encryption key from MetaMask...");
-    const pubKey = await getEncryptionPubKey();
+    // Step 1 — sign message to derive encryption key (MetaMask popup)
+    setStatus(ui.sealStatus, "Sign message to encrypt...");
 
     // Step 2 — encrypt both copies
-    const ownerEnc = encryptForOwner(plaintext, pubKey);
-    const recipientEnc = encryptForRecipient(plaintext, passphrase);
+    const ownerEnc = await encryptForOwner(plaintext);
+    const recipientEnc = await encryptForRecipient(plaintext, passphrase);
 
     // Step 3 — package as JSON blob
     const payload = JSON.stringify({ v: ENC_VERSION, o: ownerEnc, r: recipientEnc });
@@ -535,11 +632,8 @@ async function readOwnMessage(messageId = ui.manageMessageId.value.trim()) {
 
     const parsed = JSON.parse(raw);
 
-    // Decrypt owner's copy via MetaMask
-    const plain = await window.ethereum.request({
-      method: "eth_decrypt",
-      params: [JSON.stringify(parsed.o), state.account],
-    });
+    // Decrypt owner's copy using signature-derived key
+    const plain = await decryptForOwner(parsed.o);
 
     ui.updatedContent.value = plain;
     setStatus(ui.manageStatus, "Message decrypted");
@@ -563,9 +657,8 @@ async function updateContent() {
       return;
     }
 
-    const pubKey = await getEncryptionPubKey();
-    const ownerEnc = encryptForOwner(plaintext, pubKey);
-    const recipientEnc = encryptForRecipient(plaintext, newPass);
+    const ownerEnc = await encryptForOwner(plaintext);
+    const recipientEnc = await encryptForRecipient(plaintext, newPass);
     const payload = JSON.stringify({ v: ENC_VERSION, o: ownerEnc, r: recipientEnc });
 
     const gas = await gasEstimateLabel();
@@ -658,7 +751,7 @@ async function readUnlockedMessage(messageId) {
       return;
     }
 
-    const plain = decryptWithPassphrase(parsed.r, passphrase);
+    const plain = await decryptWithPassphrase(parsed.r, passphrase);
     setStatus(ui.manageStatus, `📩 ${plain}`);
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
@@ -672,6 +765,11 @@ async function refreshAll() {
 
 function readableError(error) {
   const msg = error?.shortMessage || error?.reason || error?.message || "Transaction failed";
+
+  // Custom errors from CheckIn.sol
+  if (msg.includes("AlreadyCheckedIn") || msg.includes("unknown custom error")) {
+    return "Already checked in today — wait for the countdown to end";
+  }
 
   // Catch insufficient funds and surface a clear message
   if (msg.includes("insufficient funds") || msg.includes("gas required exceeds")) {
@@ -699,7 +797,9 @@ function bindEvents() {
     saveContracts();
     await refreshAll();
   });
-  bind("refresh-signal", refreshSignal);
+  bind("refresh-signal", async () => {
+    try { await refreshSignal(); } catch {}
+  });
   bind("check-in", sendCheckIn);
   bind("seal-message", sealMessage);
   bind("refresh-messages", refreshMessages);
@@ -726,6 +826,9 @@ function bindEvents() {
         if (warning) warning.style.display = "flex";
         setText(ui.network, "Wrong network");
         setStatus(ui.signalStatus, "Switch to Ritual Chain (ID 1979) in your wallet");
+      } else if (state.signer) {
+        // Already on correct chain — just refresh data
+        try { refreshAll(); } catch {}
       } else {
         window.location.reload();
       }
