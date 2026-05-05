@@ -90,17 +90,17 @@ contract CheckIn {
         // First time checking in
         if (!signal.exists) {
             signal.exists = true;
-            signal.joinedAt = block.timestamp;
+            signal.joinedAt = _now();
             signal.currentStreak = 1;
             signal.longestStreak = 1;
             allUsers.push(msg.sender);
         } else {
-            if (block.timestamp < signal.lastCheckIn + 1 days) {
+            if (_now() < signal.lastCheckIn + 1 days) {
                 revert AlreadyCheckedIn();
             }
 
             // Check if streak is still alive (within 48hr window)
-            if (block.timestamp <= signal.lastCheckIn + STREAK_WINDOW) {
+            if (_now() <= signal.lastCheckIn + STREAK_WINDOW) {
                 // Streak continues
                 signal.currentStreak += 1;
                 if (signal.currentStreak > signal.longestStreak) {
@@ -108,18 +108,18 @@ contract CheckIn {
                 }
             } else {
                 // Streak broken
-                emit StreakBroken(msg.sender, block.timestamp, signal.currentStreak);
+                emit StreakBroken(msg.sender, _now(), signal.currentStreak);
                 signal.currentStreak = 1;
             }
         }
 
-        signal.lastCheckIn = block.timestamp;
+        signal.lastCheckIn = _now();
         signal.totalCheckIns += 1;
         ghostDeclared[msg.sender] = false;
 
         emit HeartBeat(
             msg.sender,
-            block.timestamp,
+            _now(),
             signal.currentStreak,
             signal.totalCheckIns
         );
@@ -148,7 +148,7 @@ contract CheckIn {
      */
     function silenceDuration(address user) external view returns (uint256) {
         if (!signals[user].exists) revert UserNotFound();
-        return block.timestamp - signals[user].lastCheckIn;
+        return _now() - signals[user].lastCheckIn;
     }
 
     /**
@@ -159,7 +159,7 @@ contract CheckIn {
     function isGhost(address user, uint256 threshold) external view returns (bool) {
         if (!signals[user].exists) return false;
         uint256 t = threshold == 0 ? GHOST_THRESHOLD : threshold;
-        return block.timestamp > signals[user].lastCheckIn + t;
+        return _now() > signals[user].lastCheckIn + t;
     }
 
     /**
@@ -167,7 +167,7 @@ contract CheckIn {
      */
     function canCheckIn(address user) external view returns (bool) {
         if (!signals[user].exists) return true;
-        return block.timestamp >= signals[user].lastCheckIn + 1 days;
+        return _now() >= signals[user].lastCheckIn + 1 days;
     }
 
     /**
@@ -191,11 +191,11 @@ contract CheckIn {
     function declareGhost(address user) external returns (bool) {
         UserSignal storage signal = signals[user];
         if (!signal.exists) revert UserNotFound();
-        if (block.timestamp <= signal.lastCheckIn + GHOST_THRESHOLD) revert NotGhostYet();
+        if (_now() <= signal.lastCheckIn + GHOST_THRESHOLD) revert NotGhostYet();
         if (ghostDeclared[user]) return false;
 
         ghostDeclared[user] = true;
-        emit GhostModeEntered(user, signal.lastCheckIn, block.timestamp);
+        emit GhostModeEntered(user, signal.lastCheckIn, _now());
         return true;
     }
 
@@ -227,7 +227,7 @@ contract CheckIn {
         UserSignal storage signal = signals[user];
         if (!signal.exists) return GhostRisk.Unknown;
 
-        uint256 silence = block.timestamp - signal.lastCheckIn;
+        uint256 silence = _now() - signal.lastCheckIn;
         if (silence > GHOST_THRESHOLD) return GhostRisk.Ghost;
         if (silence > STREAK_WINDOW) return GhostRisk.Watch;
         return GhostRisk.Active;
@@ -240,7 +240,7 @@ contract CheckIn {
         UserSignal storage signal = signals[user];
         if (!signal.exists) return 0;
 
-        uint256 silence = block.timestamp - signal.lastCheckIn;
+        uint256 silence = _now() - signal.lastCheckIn;
         if (silence > GHOST_THRESHOLD) return 0;
 
         uint256 score = 20;
@@ -250,6 +250,11 @@ contract CheckIn {
 
         if (silence > STREAK_WINDOW && score > 60) return 60;
         return _min(score, 100);
+    }
+
+    // Normalise block.timestamp to seconds (Ritual chain may use ms)
+    function _now() private view returns (uint256) {
+        return block.timestamp > 1e12 ? block.timestamp / 1000 : block.timestamp;
     }
 
     function _min(uint256 a, uint256 b) private pure returns (uint256) {

@@ -336,6 +336,50 @@
   flex-wrap: wrap;
 }
 
+.passphrase-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-bottom: 14px;
+}
+
+.passphrase-wrap .app-input {
+  flex: 1;
+  margin-bottom: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.toggle-vis-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 92, 191, 0.12);
+  border: 1px solid rgba(124, 92, 191, 0.35);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 14px;
+  line-height: 1;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.toggle-vis-btn:hover {
+  background: rgba(124, 92, 191, 0.24);
+  color: var(--white);
+}
+
+.unlock-warn {
+  color: #e8a04a;
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
 .chain-warning strong {
   font-weight: 600;
   text-decoration: underline;
