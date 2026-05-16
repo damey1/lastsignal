@@ -92,9 +92,16 @@ describe("MessageVault — Heartbeat-gated vault", function () {
 
     const tx = await vault.connect(recipient).claimMessage(messageId);
 
-    await expect(tx)
-      .to.emit(vault, "MessageUnlocked")
-      .withArgs(messageId, recipient.address, await blockTimestamp(tx));
+    await expect(tx).to.emit(vault, "MessageUnlocked");
+
+    // Verify event args individually (silence is ~SEVEN_DAYS, exact depends on block timing)
+    const events = (await tx.wait()).logs
+      .map(l => vault.interface.parseLog(l))
+      .filter(p => p?.name === "MessageUnlocked")[0];
+    expect(events.args.owner).to.equal(owner.address);
+    expect(events.args.recipient).to.equal(recipient.address);
+    const silenceSecs = Number(events.args.inactiveDuration);
+    expect(silenceSecs).to.be.closeTo(SEVEN_DAYS + 1, 10);
 
     expect(await vault.connect(recipient).readMessage(messageId))
       .to.equal("encrypted://message");

@@ -73,7 +73,9 @@ contract MessageVault {
 
     event MessageUnlocked(
         bytes32 indexed messageId,
+        address indexed owner,
         address indexed recipient,
+        uint256 inactiveDuration,
         uint256 unlockedAt
     );
 
@@ -218,7 +220,7 @@ contract MessageVault {
         m.unlocked = true;
         try badgeContract.mintBadge(msg.sender, GUARDIAN) {} catch {}
 
-        emit MessageUnlocked(messageId, msg.sender, block.timestamp);
+        emit MessageUnlocked(messageId, m.owner, msg.sender, silence, block.timestamp);
     }
 
     /**
