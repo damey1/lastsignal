@@ -240,6 +240,86 @@
   margin-top: 18px;
 }
 
+.badges-panel {
+  margin-bottom: 18px;
+}
+
+.ghost-panel {
+  margin-bottom: 18px;
+}
+
+.badges-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.badge-card {
+  position: relative;
+  min-height: 132px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 14px;
+  opacity: 0.52;
+}
+
+.badge-card.earned {
+  border-color: rgba(77, 217, 172, 0.34);
+  background: rgba(77, 217, 172, 0.06);
+  box-shadow: 0 0 24px rgba(77, 217, 172, 0.06);
+  opacity: 1;
+}
+
+.badge-icon {
+  width: 38px;
+  height: 38px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(124, 92, 191, 0.35);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--purple-light);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+}
+
+.badge-card.earned .badge-icon {
+  border-color: rgba(77, 217, 172, 0.55);
+  color: var(--green);
+}
+
+.badge-title {
+  margin-bottom: 6px;
+  color: var(--white);
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.badge-desc {
+  color: rgba(240, 238, 255, 0.58);
+  font-family: 'Syne', sans-serif;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.badge-state {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  color: rgba(240, 238, 255, 0.4);
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.badge-card.earned .badge-state {
+  color: var(--green);
+}
+
 .message-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -308,7 +388,8 @@
 
   .app-grid,
   .app-grid-wide,
-  .message-columns {
+  .message-columns,
+  .badges-grid {
     grid-template-columns: 1fr;
   }
 
@@ -440,6 +521,10 @@
   .metric-grid,
   .message-meta {
     grid-template-columns: 1fr;
+  }
+
+  .badge-card {
+    min-height: 112px;
   }
 
   .nav-actions .nav-tag {

@@ -44,6 +44,10 @@
       <input id="checkin-address" class="app-input" type="text" autocomplete="off" placeholder="Paste CheckIn address after deploy">
       <label class="field-label" for="vault-address">MessageVault address</label>
       <input id="vault-address" class="app-input" type="text" autocomplete="off" placeholder="Paste MessageVault address after deploy">
+      <label class="field-label" for="legacy-vault-address">Legacy MessageVault address</label>
+      <input id="legacy-vault-address" class="app-input" type="text" autocomplete="off" placeholder="Optional old MessageVault address">
+      <label class="field-label" for="badges-address">Badges address</label>
+      <input id="badges-address" class="app-input" type="text" autocomplete="off" placeholder="Paste LastSignalBadges address after deploy">
       <p id="config-status" class="muted-line">No contracts loaded — deploy first or paste addresses</p>
       <button id="reset-contracts" class="app-button app-button-small app-button-secondary" style="margin-top:6px;">↺ Reset to deployed</button>
       <p id="contract-deployed-hint" class="muted-line" style="display:none; font-size:10px; margin-top:4px;"></p>
@@ -78,12 +82,43 @@
           <span class="metric-label">Risk</span>
           <strong id="ghost-risk">--</strong>
         </div>
+        <div>
+          <span class="metric-label">Signal points</span>
+          <strong id="signal-points">--</strong>
+        </div>
+        <div>
+          <span class="metric-label">Ghost calls</span>
+          <strong id="ghosts-called">--</strong>
+        </div>
       </div>
       <div class="panel-actions">
         <button id="check-in" class="app-button">Check in</button>
+        <button id="migrate-signal" class="app-button app-button-secondary" style="display:none;">Migrate signal</button>
       </div>
       <p id="signal-status" class="muted-line">Connect wallet to load your signal</p>
     </div>
+  </section>
+
+  <section class="app-panel badges-panel">
+    <div class="panel-heading">
+      <h2>Badges</h2>
+      <button id="refresh-badges" class="icon-button" title="Refresh badges">↻</button>
+    </div>
+    <div id="badges-grid" class="badges-grid"></div>
+    <p id="badges-status" class="muted-line">Earn badges by checking in and protecting messages</p>
+  </section>
+
+  <section class="app-panel ghost-panel">
+    <div class="panel-heading">
+      <h2>Ghost Watch</h2>
+    </div>
+    <label class="field-label" for="ghost-address">Wallet to check</label>
+    <input id="ghost-address" class="app-input" type="text" autocomplete="off" placeholder="0x...">
+    <div class="split-actions">
+      <button id="check-ghost" class="app-button app-button-secondary">Check status</button>
+      <button id="declare-ghost" class="app-button">Declare ghost</button>
+    </div>
+    <p id="ghost-status" class="muted-line">Accurate first callers earn points and Ghost Caller status</p>
   </section>
 
   <section class="app-grid app-grid-wide">
@@ -129,7 +164,7 @@
 
   <section class="app-panel messages-panel">
     <div class="panel-heading">
-      <h2>Messages</h2>
+      <h2>New Messages</h2>
       <button id="refresh-messages" class="icon-button" title="Refresh messages">↻</button>
     </div>
     <div class="message-columns">
@@ -142,6 +177,24 @@
         <div id="recipient-messages" class="message-list"></div>
       </div>
     </div>
+  </section>
+
+  <section id="legacy-messages-panel" class="app-panel messages-panel" style="display:none;">
+    <div class="panel-heading">
+      <h2>Legacy Messages</h2>
+      <button id="refresh-legacy-messages" class="icon-button" title="Refresh legacy messages">↻</button>
+    </div>
+    <div class="message-columns">
+      <div>
+        <h3 class="subhead">Owned</h3>
+        <div id="legacy-owned-messages" class="message-list"></div>
+      </div>
+      <div>
+        <h3 class="subhead">For You</h3>
+        <div id="legacy-recipient-messages" class="message-list"></div>
+      </div>
+    </div>
+    <p class="muted-line">These messages remain in the original vault. New sealed messages use the new vault above.</p>
   </section>
 </main>
 

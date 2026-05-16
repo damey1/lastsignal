@@ -2,21 +2,49 @@ const { ethers } = require("hardhat");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
+  const { network } = hre;
+  const fs = require("fs");
+  const path = require("path");
+  const outPath = path.join(__dirname, "..", "deployed.json");
+
+  let existingDeployed = {};
+  try {
+    existingDeployed = JSON.parse(fs.readFileSync(outPath, "utf8"));
+  } catch (_) {
+    existingDeployed = {};
+  }
+
+  const previousCheckInAddress =
+    process.env.PREVIOUS_CHECKIN_ADDRESS ||
+    existingDeployed.checkIn ||
+    existingDeployed.previousCheckIn ||
+    ethers.ZeroAddress;
 
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("  LastSignal — your EchoLife onchain");
   console.log("  Deploying contracts to Ritual Chain...");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`  Deployer: ${deployer.address}`);
+  if (previousCheckInAddress !== ethers.ZeroAddress) {
+    console.log(`  Previous CheckIn for migration: ${previousCheckInAddress}`);
+  }
 
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log(`  Balance:  ${ethers.formatEther(balance)} RITUAL`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
+  // ── Deploy LastSignalBadges ──
+  console.log("🏅 Deploying LastSignalBadges.sol...");
+  const LastSignalBadges = await ethers.getContractFactory("LastSignalBadges");
+  const badges = await LastSignalBadges.deploy();
+  await badges.waitForDeployment();
+  const badgesAddress = await badges.getAddress();
+  console.log(`✅ LastSignalBadges deployed: ${badgesAddress}\n`);
+
   // ── Deploy CheckIn ──
   console.log("📡 Deploying CheckIn.sol (Heartbeat)...");
   const CheckIn = await ethers.getContractFactory("CheckIn");
-  const checkIn = await CheckIn.deploy();
+  const checkIn = await CheckIn.deploy(badgesAddress, previousCheckInAddress);
   await checkIn.waitForDeployment();
   const checkInAddress = await checkIn.getAddress();
   console.log(`✅ CheckIn deployed: ${checkInAddress}\n`);
@@ -24,21 +52,25 @@ async function main() {
   // ── Deploy MessageVault ──
   console.log("🔒 Deploying MessageVault.sol...");
   const MessageVault = await ethers.getContractFactory("MessageVault");
-  const messageVault = await MessageVault.deploy(checkInAddress);
+  const messageVault = await MessageVault.deploy(checkInAddress, badgesAddress);
   await messageVault.waitForDeployment();
   const vaultAddress = await messageVault.getAddress();
   console.log(`✅ MessageVault deployed: ${vaultAddress}\n`);
 
+  // ── Authorize protocol contracts to award badges ──
+  console.log("🔑 Authorizing badge minters...");
+  await (await badges.setMinter(checkInAddress, true)).wait();
+  await (await badges.setMinter(vaultAddress, true)).wait();
+  console.log("✅ Badge minters authorized\n");
+
   // ── Write deployed.json ──
-  const { network } = hre;
-  const fs = require("fs");
-  const path = require("path");
   const deployedJson = {
+    badges: badgesAddress,
     checkIn: checkInAddress,
     messageVault: vaultAddress,
+    previousCheckIn: previousCheckInAddress !== ethers.ZeroAddress ? previousCheckInAddress : undefined,
     network: network.name,
   };
-  const outPath = path.join(__dirname, "..", "deployed.json");
   fs.writeFileSync(outPath, JSON.stringify(deployedJson, null, 2));
   console.log(`📝 Wrote ${outPath}\n`);
 
@@ -46,6 +78,7 @@ async function main() {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("  ✅ DEPLOYMENT COMPLETE");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`  Badges:       ${badgesAddress}`);
   console.log(`  CheckIn:      ${checkInAddress}`);
   console.log(`  MessageVault: ${vaultAddress}`);
   console.log(`  Network:      ${network.name}`);

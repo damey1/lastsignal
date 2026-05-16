@@ -1,5 +1,10 @@
 {
-  "checkIn": "0x67a2b93a6ab2945BEE1eb8C1C76a5e22Ebc1c71c",
-  "messageVault": "0xAD00AC0CfE2eD1F792a80E4EaAF8782D0c620B02",
-  "network": "ritual"
+  "badges": "0x83B9cCa4A698fEf5a5a9E31A27643eF99178b6b9",
+  "checkIn": "0x8A81adc79A883E46e7D8d93DD23b1998d8E70da5",
+  "messageVault": "0x14609FA9270129bfD37FC85b69bd49BdA6fDfe90",
+  "legacyMessageVault": "0xAD00AC0CfE2eD1F792a80E4EaAF8782D0c620B02",
+  "previousCheckIn": "0x67a2b93a6ab2945BEE1eb8C1C76a5e22Ebc1c71c",
+  "network": "ritual",
+  "checkInAdapter": "0x2357Fb93eBaF0fD5611A937bFE44F725eFa86b84",
+  "legacyVaultCheckInContract": "0x2357Fb93eBaF0fD5611A937bFE44F725eFa86b84"
 }

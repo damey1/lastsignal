@@ -1,13 +1,24 @@
 const CHECKIN_ABI = [
   "function checkIn() external",
+  "function migrateMySignal() external",
+  "function declareGhost(address user) external returns (bool)",
   "function mySignal() external view returns (uint256 lastCheckIn,uint256 totalCheckIns,uint256 currentStreak,uint256 longestStreak,uint256 joinedAt,bool exists)",
+  "function getSignal(address user) external view returns (uint256 lastCheckIn,uint256 totalCheckIns,uint256 currentStreak,uint256 longestStreak,uint256 joinedAt,bool exists)",
   "function canCheckIn(address user) external view returns (bool)",
+  "function isGhost(address user,uint256 threshold) external view returns (bool)",
+  "function silenceDuration(address user) external view returns (uint256)",
   "function signalLevel(address user) external view returns (uint8)",
   "function ghostRisk(address user) external view returns (uint8)",
   "function signalScore(address user) external view returns (uint256)",
+  "function signalPoints(address user) external view returns (uint256)",
+  "function ghostsCalled(address user) external view returns (uint256)",
   "function nextCheckInTime(address user) external view returns (uint256)",
+  "function previousCheckIn() external view returns (address)",
   "error AlreadyCheckedIn()",
-  "error UserNotFound()"
+  "error UserNotFound()",
+  "error AlreadyMigrated()",
+  "error MigrationUnavailable()",
+  "error CannotDeclareSelf()"
 ];
 
 const VAULT_ABI = [
@@ -25,6 +36,14 @@ const VAULT_ABI = [
   "event MessageSealed(bytes32 indexed messageId,address indexed owner,address indexed recipient,uint256 unlockAfter,uint256 timestamp)"
 ];
 
+const BADGE_ABI = [
+  "function hasBadge(address user,uint8 badgeType) external view returns (bool)",
+  "function tokenOf(address user,uint8 badgeType) external view returns (uint256)",
+  "function balanceOf(address user) external view returns (uint256)",
+  "function tokenURI(uint256 tokenId) external view returns (string)",
+  "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)"
+];
+
 const RITUAL_CHAIN_ID = 1979;
 const RITUAL_CHAIN_HEX = "0x7BB";
 
@@ -32,6 +51,20 @@ const levelLabels = ["None", "New", "Stable", "Strong", "Legendary"];
 const riskLabels = ["Unknown", "Active", "Watch", "Ghost"];
 const daySeconds = 24 * 60 * 60;
 const ENC_VERSION = 1;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+const badgeCatalog = [
+  { type: 1, icon: "01", title: "First Signal", desc: "Send your first heartbeat" },
+  { type: 2, icon: "03", title: "3 Day Signal", desc: "Keep a 3 day streak alive" },
+  { type: 3, icon: "07", title: "7 Day Signal", desc: "Hold the line for a full week" },
+  { type: 4, icon: "14", title: "14 Day Signal", desc: "Build a two week rhythm" },
+  { type: 5, icon: "30", title: "30 Day Legend", desc: "Reach a legendary month" },
+  { type: 6, icon: "↺", title: "Comeback Signal", desc: "Return after a broken streak" },
+  { type: 7, icon: "◇", title: "Vault Sealer", desc: "Seal your first protected message" },
+  { type: 8, icon: "◆", title: "Guardian", desc: "Claim a message meant for you" },
+  { type: 9, icon: "GC", title: "Ghost Caller", desc: "Be first to confirm a ghost signal" },
+  { type: 10, icon: "BD", title: "Back From The Dead", desc: "Return after the community called ghost" },
+];
 
 // ── ENCODING HELPERS (browser-native, no nacl.util dependency) ──
 const _textEnc = new TextEncoder();
@@ -157,6 +190,8 @@ const state = {
   account: null,
   checkIn: null,
   vault: null,
+  legacyVault: null,
+  badges: null,
   ownerKey: null,
 };
 
@@ -168,17 +203,25 @@ const ui = {
   wallet: $("wallet-pill"),
   checkInAddress: $("checkin-address"),
   vaultAddress: $("vault-address"),
+  legacyVaultAddress: $("legacy-vault-address"),
+  badgesAddress: $("badges-address"),
   saveContracts: $("save-contracts"),
   configStatus: $("config-status"),
   refreshSignal: $("refresh-signal"),
   checkInButton: $("check-in"),
+  migrateSignal: $("migrate-signal"),
   signalScore: $("signal-score"),
   signalLevel: $("signal-level"),
   currentStreak: $("current-streak"),
   longestStreak: $("longest-streak"),
   totalCheckIns: $("total-checkins"),
   ghostRisk: $("ghost-risk"),
+  signalPoints: $("signal-points"),
+  ghostsCalled: $("ghosts-called"),
   signalStatus: $("signal-status"),
+  refreshBadges: $("refresh-badges"),
+  badgesGrid: $("badges-grid"),
+  badgesStatus: $("badges-status"),
   recipientAddress: $("recipient-address"),
   unlockDays: $("unlock-days"),
   plaintextMessage: $("plaintext-message"),
@@ -195,7 +238,15 @@ const ui = {
   manageStatus: $("manage-status"),
   refreshMessages: $("refresh-messages"),
   ownedMessages: $("owned-messages"),
-  recipientMessages: $("recipient-messages")
+  recipientMessages: $("recipient-messages"),
+  legacyMessagesPanel: $("legacy-messages-panel"),
+  refreshLegacyMessages: $("refresh-legacy-messages"),
+  legacyOwnedMessages: $("legacy-owned-messages"),
+  legacyRecipientMessages: $("legacy-recipient-messages"),
+  ghostAddress: $("ghost-address"),
+  checkGhost: $("check-ghost"),
+  declareGhost: $("declare-ghost"),
+  ghostStatus: $("ghost-status")
 };
 
 function shortAddress(address) {
@@ -249,6 +300,10 @@ function setStatus(node, text) {
   setText(node, text);
 }
 
+function sameAddress(a, b) {
+  return String(a || "").toLowerCase() === String(b || "").toLowerCase();
+}
+
 let _configReady = null; // promise that resolves when loadConfig finishes
 
 async function loadConfig() {
@@ -263,13 +318,19 @@ async function loadConfig() {
   // Source 2: localStorage (user-saved via Save button)
   const savedCheckIn = localStorage.getItem("lastsignal.checkIn");
   const savedVault = localStorage.getItem("lastsignal.vault");
+  const savedLegacyVault = localStorage.getItem("lastsignal.legacyVault");
+  const savedBadges = localStorage.getItem("lastsignal.badges");
 
   // Priority: deployed.json wins on page load. User-saved only applies after clicking Save.
   const defaultCheckIn = deployed.checkIn || "";
   const defaultVault = deployed.messageVault || "";
+  const defaultLegacyVault = deployed.legacyMessageVault || "";
+  const defaultBadges = deployed.badges || "";
 
   ui.checkInAddress.value = defaultCheckIn || savedCheckIn || "";
   ui.vaultAddress.value = defaultVault || savedVault || "";
+  ui.legacyVaultAddress.value = defaultLegacyVault || savedLegacyVault || "";
+  ui.badgesAddress.value = defaultBadges || savedBadges || "";
   configureContracts();
   })().catch(() => {});
 }
@@ -277,9 +338,13 @@ async function loadConfig() {
 function configureContracts() {
   const checkInAddress = ui.checkInAddress.value.trim();
   const vaultAddress = ui.vaultAddress.value.trim();
+  const legacyVaultAddress = ui.legacyVaultAddress.value.trim();
+  const badgesAddress = ui.badgesAddress.value.trim();
 
   state.checkIn = null;
   state.vault = null;
+  state.legacyVault = null;
+  state.badges = null;
 
   if (!state.signer) {
     setStatus(ui.configStatus, "Connect wallet before loading contracts");
@@ -293,20 +358,41 @@ function configureContracts() {
 
   state.checkIn = new ethers.Contract(checkInAddress, CHECKIN_ABI, state.signer);
   state.vault = new ethers.Contract(vaultAddress, VAULT_ABI, state.signer);
-  setStatus(ui.configStatus, "Contracts loaded");
+  if (ethers.isAddress(legacyVaultAddress) && !sameAddress(legacyVaultAddress, vaultAddress)) {
+    state.legacyVault = new ethers.Contract(legacyVaultAddress, VAULT_ABI, state.signer);
+  }
+  if (ethers.isAddress(badgesAddress)) {
+    state.badges = new ethers.Contract(badgesAddress, BADGE_ABI, state.signer);
+  }
+  if (ui.legacyMessagesPanel) {
+    ui.legacyMessagesPanel.style.display = state.legacyVault ? "block" : "none";
+  }
+  setStatus(ui.configStatus, state.legacyVault
+    ? "Contracts, badges, and legacy vault loaded"
+    : state.badges ? "Contracts and badges loaded" : "Contracts loaded — badges not configured");
 }
 
 function saveContracts() {
   const checkInAddress = ui.checkInAddress.value.trim();
   const vaultAddress = ui.vaultAddress.value.trim();
+  const legacyVaultAddress = ui.legacyVaultAddress.value.trim();
+  const badgesAddress = ui.badgesAddress.value.trim();
   localStorage.setItem("lastsignal.checkIn", checkInAddress);
   localStorage.setItem("lastsignal.vault", vaultAddress);
+  localStorage.setItem("lastsignal.legacyVault", legacyVaultAddress);
+  localStorage.setItem("lastsignal.badges", badgesAddress);
   configureContracts();
 }
 
 function requireContracts() {
   if (!state.signer) throw new Error("Connect wallet first");
   if (!state.checkIn || !state.vault) throw new Error("Load contract addresses first");
+}
+
+function requireVault(vault = state.vault) {
+  if (!state.signer) throw new Error("Connect wallet first");
+  if (!vault) throw new Error("Load vault address first");
+  return vault;
 }
 
 async function switchToRitualChain() {
@@ -377,12 +463,14 @@ async function refreshSignal() {
 
   try {
     // Individual calls so one RPC error doesn't wipe everything
-    let signal, canCheckIn, level, risk, score;
+    let signal, canCheckIn, level, risk, score, points, calls;
     try { signal = await state.checkIn.mySignal(); } catch {}
     try { canCheckIn = await state.checkIn.canCheckIn(state.account); } catch {}
     try { level = await state.checkIn.signalLevel(state.account); } catch {}
     try { risk = await state.checkIn.ghostRisk(state.account); } catch {}
     try { score = await state.checkIn.signalScore(state.account); } catch {}
+    try { points = await state.checkIn.signalPoints(state.account); } catch {}
+    try { calls = await state.checkIn.ghostsCalled(state.account); } catch {}
 
     if (!signal) throw new Error("No signal data");
 
@@ -399,6 +487,9 @@ async function refreshSignal() {
     setText(ui.longestStreak, asNumber(longestStreak).toString());
     setText(ui.totalCheckIns, asNumber(totalCheckIns).toString());
     setText(ui.ghostRisk, riskLabels[asNumber(risk)] || "Unknown");
+    setText(ui.signalPoints, asNumber(points).toString());
+    setText(ui.ghostsCalled, asNumber(calls).toString());
+    if (ui.migrateSignal) ui.migrateSignal.style.display = "none";
     if (canCheckIn) {
       setStatus(ui.signalStatus, "Ready for today's heartbeat");
     } else {
@@ -441,9 +532,106 @@ async function refreshSignal() {
     setText(ui.longestStreak, "0");
     setText(ui.totalCheckIns, "0");
     setText(ui.ghostRisk, "Unknown");
+    setText(ui.signalPoints, "0");
+    setText(ui.ghostsCalled, "0");
     setStatus(ui.signalStatus, "No heartbeat recorded");
+    await updateMigrationState();
     // Don't enable the button — leave it in the last known state
   }
+}
+
+async function updateMigrationState() {
+  if (!ui.migrateSignal || !state.checkIn || !state.signer || !state.account) return;
+
+  ui.migrateSignal.style.display = "none";
+  ui.migrateSignal.disabled = true;
+
+  let previousAddress = ZERO_ADDRESS;
+  try {
+    previousAddress = await state.checkIn.previousCheckIn();
+  } catch {
+    return;
+  }
+
+  if (!previousAddress || sameAddress(previousAddress, ZERO_ADDRESS)) return;
+
+  try {
+    const previousCheckIn = new ethers.Contract(previousAddress, CHECKIN_ABI, state.signer);
+    const previousSignal = await previousCheckIn.getSignal(state.account);
+    if (!previousSignal?.[5]) return;
+
+    ui.migrateSignal.style.display = "inline-flex";
+    ui.migrateSignal.disabled = false;
+    setStatus(ui.signalStatus, "Previous signal found — migrate to preserve your streak");
+  } catch {
+    // No previous signal for this wallet.
+  }
+}
+
+async function earnedBadgeTypes() {
+  if (!state.badges || !state.account) return new Set();
+
+  const checks = await Promise.allSettled(
+    badgeCatalog.map((badge) => state.badges.hasBadge(state.account, badge.type))
+  );
+
+  return new Set(
+    badgeCatalog
+      .filter((_, index) => checks[index].status === "fulfilled" && checks[index].value)
+      .map((badge) => badge.type)
+  );
+}
+
+function renderBadgeCards(earned) {
+  if (!ui.badgesGrid) return;
+  ui.badgesGrid.innerHTML = "";
+
+  for (const badge of badgeCatalog) {
+    const isEarned = earned.has(badge.type);
+    const card = document.createElement("article");
+    card.className = `badge-card${isEarned ? " earned" : ""}`;
+    card.innerHTML = `
+      <div class="badge-icon">${badge.icon}</div>
+      <div>
+        <div class="badge-title">${badge.title}</div>
+        <div class="badge-desc">${badge.desc}</div>
+      </div>
+      <span class="badge-state">${isEarned ? "earned" : "locked"}</span>
+    `;
+    ui.badgesGrid.appendChild(card);
+  }
+}
+
+async function refreshBadges() {
+  if (!ui.badgesGrid) return;
+
+  if (!state.badges || !state.account) {
+    renderBadgeCards(new Set());
+    setStatus(ui.badgesStatus, state.account ? "Deploy or paste a badges address to load collectibles" : "Connect wallet to load badges");
+    return new Set();
+  }
+
+  try {
+    const earned = await earnedBadgeTypes();
+    renderBadgeCards(earned);
+    setStatus(ui.badgesStatus, `${earned.size}/${badgeCatalog.length} badges earned`);
+    return earned;
+  } catch (error) {
+    renderBadgeCards(new Set());
+    setStatus(ui.badgesStatus, readableError(error));
+    return new Set();
+  }
+}
+
+async function withBadgeCelebration(action, statusNode) {
+  const before = await earnedBadgeTypes();
+  const result = await action();
+  const after = await refreshBadges();
+  const unlocked = badgeCatalog.filter((badge) => after.has(badge.type) && !before.has(badge.type));
+  if (unlocked.length) {
+    setStatus(statusNode || ui.badgesStatus, `Badge unlocked: ${unlocked.map((badge) => badge.title).join(", ")}`);
+  }
+  return result;
 }
 
 async function sendCheckIn() {
@@ -452,8 +640,10 @@ async function sendCheckIn() {
   try {
     const gas = await gasEstimateLabel();
     setStatus(ui.signalStatus, `Sending heartbeat ${gas}`.trim());
-    const tx = await state.checkIn.checkIn();
-    const receipt = await tx.wait();
+    const receipt = await withBadgeCelebration(async () => {
+      const tx = await state.checkIn.checkIn();
+      return tx.wait();
+    }, ui.signalStatus);
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.signalStatus, `Heartbeat confirmed — ${link}`);
     setBusy(ui.checkInButton, false);
@@ -463,6 +653,71 @@ async function sendCheckIn() {
     // Refresh first to re-compute disabled state, then re-enable
     try { await refreshSignal(); } catch {}
     setBusy(ui.checkInButton, false);
+  }
+}
+
+async function migrateSignal() {
+  requireContracts();
+  setBusy(ui.migrateSignal, true);
+  try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.signalStatus, `Migrating previous signal ${gas}`.trim());
+    const receipt = await withBadgeCelebration(async () => {
+      const tx = await state.checkIn.migrateMySignal();
+      return tx.wait();
+    }, ui.signalStatus);
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.signalStatus, `Signal migrated — ${link}`);
+    if (ui.migrateSignal) ui.migrateSignal.style.display = "none";
+    await refreshAll();
+  } catch (error) {
+    setStatus(ui.signalStatus, readableError(error));
+  } finally {
+    setBusy(ui.migrateSignal, false);
+    if (ui.migrateSignal?.style.display !== "none") ui.migrateSignal.disabled = false;
+  }
+}
+
+async function checkGhostStatus() {
+  requireContracts();
+  const target = ui.ghostAddress.value.trim();
+  if (!ethers.isAddress(target)) throw new Error("Enter a valid wallet address");
+
+  try {
+    const [isGhost, silence] = await Promise.all([
+      state.checkIn.isGhost(target, 0),
+      state.checkIn.silenceDuration(target),
+    ]);
+    const daysSilent = Math.floor(asNumber(silence) / daySeconds);
+    setStatus(ui.ghostStatus, isGhost
+      ? `${shortAddress(target)} is ghost eligible after ${daysSilent} silent days`
+      : `${shortAddress(target)} is not ghost yet — ${daysSilent} silent days`);
+  } catch (error) {
+    setStatus(ui.ghostStatus, readableError(error));
+  }
+}
+
+async function declareGhost() {
+  requireContracts();
+  const target = ui.ghostAddress.value.trim();
+  if (!ethers.isAddress(target)) throw new Error("Enter a valid wallet address");
+  if (sameAddress(target, state.account)) throw new Error("You cannot declare yourself ghost");
+
+  setBusy(ui.declareGhost, true);
+  try {
+    const gas = await gasEstimateLabel();
+    setStatus(ui.ghostStatus, `Declaring ghost ${gas}`.trim());
+    const receipt = await withBadgeCelebration(async () => {
+      const tx = await state.checkIn.declareGhost(target);
+      return tx.wait();
+    }, ui.ghostStatus);
+    const link = explorerTxUrl(receipt.hash);
+    setStatus(ui.ghostStatus, `Ghost declared — +25 points — ${link}`);
+    await refreshSignal();
+  } catch (error) {
+    setStatus(ui.ghostStatus, readableError(error));
+  } finally {
+    setBusy(ui.declareGhost, false);
   }
 }
 
@@ -494,8 +749,10 @@ async function sealMessage() {
     // Step 4 — seal on-chain
     const gas = await gasEstimateLabel();
     setStatus(ui.sealStatus, `Sealing encrypted message ${gas}`.trim());
-    const tx = await state.vault.sealMessage(recipient, payload, daysToSeconds(ui.unlockDays.value));
-    const receipt = await tx.wait();
+    const receipt = await withBadgeCelebration(async () => {
+      const tx = await state.vault.sealMessage(recipient, payload, daysToSeconds(ui.unlockDays.value));
+      return tx.wait();
+    }, ui.sealStatus);
     const messageId = findMessageId(receipt);
     const link = explorerTxUrl(receipt.hash);
     ui.manageMessageId.value = messageId || "";
@@ -527,17 +784,26 @@ function findMessageId(receipt) {
 }
 
 async function refreshMessages() {
-  requireContracts();
-  const [ownedIds, recipientIds] = await Promise.all([
-    state.vault.getMyMessages(),
-    state.vault.getMessagesForMe()
-  ]);
-
-  await renderMessages(ui.ownedMessages, ownedIds, "owner");
-  await renderMessages(ui.recipientMessages, recipientIds, "recipient");
+  requireVault();
+  await refreshVaultMessages(state.vault, ui.ownedMessages, ui.recipientMessages, "new");
 }
 
-async function renderMessages(container, ids, mode) {
+async function refreshLegacyMessages() {
+  if (!state.legacyVault) return;
+  await refreshVaultMessages(state.legacyVault, ui.legacyOwnedMessages, ui.legacyRecipientMessages, "legacy");
+}
+
+async function refreshVaultMessages(vault, ownedContainer, recipientContainer, source) {
+  const [ownedIds, recipientIds] = await Promise.all([
+    vault.getMyMessages(),
+    vault.getMessagesForMe()
+  ]);
+
+  await renderMessages(vault, ownedContainer, ownedIds, "owner", source);
+  await renderMessages(vault, recipientContainer, recipientIds, "recipient", source);
+}
+
+async function renderMessages(vault, container, ids, mode, source) {
   container.innerHTML = "";
 
   if (!ids.length) {
@@ -550,14 +816,14 @@ async function renderMessages(container, ids, mode) {
 
   for (const id of ids) {
     const [info, unlockable] = await Promise.all([
-      state.vault.getMessageInfo(id),
-      state.vault.isUnlockable(id)
+      vault.getMessageInfo(id),
+      vault.isUnlockable(id)
     ]);
-    container.appendChild(messageCard(id, info, unlockable, mode));
+    container.appendChild(messageCard(vault, id, info, unlockable, mode, source));
   }
 }
 
-function messageCard(id, info, unlockable, mode) {
+function messageCard(vault, id, info, unlockable, mode, source) {
   const item = document.createElement("article");
   item.className = "message-item";
   if (unlockable) item.classList.add("unlockable");
@@ -585,23 +851,23 @@ function messageCard(id, info, unlockable, mode) {
 
   const select = actionButton("Select", () => {
     ui.manageMessageId.value = id;
-    setStatus(ui.manageStatus, `Selected ${id}`);
+    setStatus(ui.manageStatus, `Selected ${source === "legacy" ? "legacy " : ""}${id}`);
   });
   actions.appendChild(select);
 
   if (mode === "owner") {
-    actions.appendChild(actionButton("Read own", () => readOwnMessage(id)));
+    actions.appendChild(actionButton("Read own", () => readOwnMessage(id, vault)));
     if (!info.unlocked && !info.canceled) {
-      actions.appendChild(actionButton("Cancel", () => cancelMessage(id)));
+      actions.appendChild(actionButton("Cancel", () => cancelMessage(id, vault)));
     }
   }
 
   if (mode === "recipient") {
     if (unlockable && !info.unlocked && !info.canceled) {
-      actions.appendChild(actionButton("Claim", () => claimMessage(id)));
+      actions.appendChild(actionButton("Claim", () => claimMessage(id, vault)));
     }
     if (info.unlocked && !info.canceled) {
-      actions.appendChild(actionButton("Read", () => readUnlockedMessage(id)));
+      actions.appendChild(actionButton("Read", () => readUnlockedMessage(id, vault)));
     }
   }
 
@@ -618,10 +884,10 @@ function actionButton(label, onClick) {
   return button;
 }
 
-async function readOwnMessage(messageId = ui.manageMessageId.value.trim()) {
-  requireContracts();
+async function readOwnMessage(messageId = ui.manageMessageId.value.trim(), vault = state.vault) {
+  vault = requireVault(vault);
   try {
-    const raw = await state.vault.readOwnMessage(messageId);
+    const raw = await vault.readOwnMessage(messageId);
 
     if (!isEncryptedPayload(raw)) {
       // Legacy — unencrypted content, show as-is
@@ -667,7 +933,7 @@ async function updateContent() {
     const receipt = await tx.wait();
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.manageStatus, `Content updated — ${link}`);
-    await refreshMessages();
+    await refreshAllMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   } finally {
@@ -688,7 +954,7 @@ async function updateDelay() {
     const receipt = await tx.wait();
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.manageStatus, `Delay updated — ${link}`);
-    await refreshMessages();
+    await refreshAllMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   } finally {
@@ -696,19 +962,19 @@ async function updateDelay() {
   }
 }
 
-async function cancelMessage(messageId = ui.manageMessageId.value.trim()) {
-  requireContracts();
+async function cancelMessage(messageId = ui.manageMessageId.value.trim(), vault = state.vault) {
+  vault = requireVault(vault);
   if (!messageId) throw new Error("Message ID required");
 
   setBusy(ui.cancelMessage, true);
   try {
     const gas = await gasEstimateLabel();
     setStatus(ui.manageStatus, `Canceling message ${gas}`.trim());
-    const tx = await state.vault.cancelMessage(messageId);
+    const tx = await vault.cancelMessage(messageId);
     const receipt = await tx.wait();
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.manageStatus, `Message canceled — ${link}`);
-    await refreshMessages();
+    await refreshAllMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   } finally {
@@ -716,25 +982,27 @@ async function cancelMessage(messageId = ui.manageMessageId.value.trim()) {
   }
 }
 
-async function claimMessage(messageId) {
-  requireContracts();
+async function claimMessage(messageId, vault = state.vault) {
+  vault = requireVault(vault);
   try {
     const gas = await gasEstimateLabel();
     setStatus(ui.manageStatus, `Claiming message ${gas}`.trim());
-    const tx = await state.vault.claimMessage(messageId);
-    const receipt = await tx.wait();
+    const receipt = await withBadgeCelebration(async () => {
+      const tx = await vault.claimMessage(messageId);
+      return tx.wait();
+    }, ui.manageStatus);
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.manageStatus, `Message claimed — ${link}`);
-    await refreshMessages();
+    await refreshAllMessages();
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   }
 }
 
-async function readUnlockedMessage(messageId) {
-  requireContracts();
+async function readUnlockedMessage(messageId, vault = state.vault) {
+  vault = requireVault(vault);
   try {
-    const raw = await state.vault.readMessage(messageId);
+    const raw = await vault.readMessage(messageId);
 
     if (!isEncryptedPayload(raw)) {
       // Legacy — unencrypted content, show as-is
@@ -758,9 +1026,13 @@ async function readUnlockedMessage(messageId) {
   }
 }
 
+async function refreshAllMessages() {
+  await Promise.allSettled([refreshMessages(), refreshLegacyMessages()]);
+}
+
 async function refreshAll() {
   if (!state.checkIn || !state.vault) return;
-  await Promise.allSettled([refreshSignal(), refreshMessages()]);
+  await Promise.allSettled([refreshSignal(), refreshAllMessages(), refreshBadges()]);
 }
 
 function readableError(error) {
@@ -801,17 +1073,24 @@ function bindEvents() {
     try { await refreshSignal(); } catch {}
   });
   bind("check-in", sendCheckIn);
+  bind("migrate-signal", migrateSignal);
   bind("seal-message", sealMessage);
   bind("refresh-messages", refreshMessages);
+  bind("refresh-legacy-messages", refreshLegacyMessages);
+  bind("refresh-badges", refreshBadges);
   bind("read-own-message", readOwnMessage);
   bind("update-content", updateContent);
   bind("update-delay", updateDelay);
   bind("cancel-message", cancelMessage);
+  bind("check-ghost", checkGhostStatus);
+  bind("declare-ghost", declareGhost);
   bind("switch-chain", switchToRitualChain);
   bind("network-label", switchToRitualChain);
   bind("reset-contracts", async () => {
     localStorage.removeItem("lastsignal.checkIn");
     localStorage.removeItem("lastsignal.vault");
+    localStorage.removeItem("lastsignal.legacyVault");
+    localStorage.removeItem("lastsignal.badges");
     // Wait a tick for UI, then reload from deployed.json
     setStatus(ui.configStatus, "Resetting to deployed defaults...");
     await loadConfig();

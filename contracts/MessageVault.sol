@@ -12,6 +12,11 @@ pragma solidity ^0.8.24;
  */
 interface ICheckIn {
     function lastSeen(address user) external view returns (uint256);
+    function totalUsers() external view returns (uint256);
+}
+
+interface IMessageVaultBadges {
+    function mintBadge(address user, uint8 badgeType) external returns (uint256);
 }
 
 contract MessageVault {
@@ -42,9 +47,13 @@ contract MessageVault {
 
     // CheckIn contract address (for reading heartbeat data)
     ICheckIn public checkInContract;
+    IMessageVaultBadges public badgeContract;
 
     // owner => next message nonce
     mapping(address => uint256) private ownerNonces;
+
+    uint8 private constant VAULT_SEALER = 7;
+    uint8 private constant GUARDIAN = 8;
 
     // ── UPGRADE STATE ──
 
@@ -130,9 +139,11 @@ contract MessageVault {
 
     // ── CONSTRUCTOR ──
 
-    constructor(address _checkInContract) {
+    constructor(address _checkInContract, address _badgeContract) {
         require(_checkInContract != address(0), "Invalid CheckIn contract");
+        require(_badgeContract != address(0), "Invalid badge contract");
         checkInContract = ICheckIn(_checkInContract);
+        badgeContract = IMessageVaultBadges(_badgeContract);
         owner = msg.sender;
     }
 
@@ -175,6 +186,7 @@ contract MessageVault {
 
         ownerMessages[msg.sender].push(messageId);
         recipientMessages[recipient].push(messageId);
+        try badgeContract.mintBadge(msg.sender, VAULT_SEALER) {} catch {}
 
         emit MessageSealed(
             messageId,
@@ -204,6 +216,7 @@ contract MessageVault {
         if (silence < m.inactivityUnlock) revert StillLocked();
 
         m.unlocked = true;
+        try badgeContract.mintBadge(msg.sender, GUARDIAN) {} catch {}
 
         emit MessageUnlocked(messageId, msg.sender, block.timestamp);
     }
@@ -449,13 +462,11 @@ contract MessageVault {
 
     /**
      * @dev Verify an address is a contract implementing the ICheckIn interface.
-     *      Checks contract existence + makes a test call to lastSeen() to confirm
-     *      the interface is actually implemented.
+     *      Uses totalUsers() because lastSeen() correctly reverts for unknown users.
      */
     function _assertIsValidCheckIn(address candidate) private view {
         if (candidate.code.length == 0) revert InvalidContractAddress();
-        // Dry-run lastSeen(this) to confirm the interface works
-        try ICheckIn(candidate).lastSeen(address(this)) {
+        try ICheckIn(candidate).totalUsers() {
             // Interface conforms — call succeeded (even if it returns 0)
         } catch {
             revert InvalidContractAddress();

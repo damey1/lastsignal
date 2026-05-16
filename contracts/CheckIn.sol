@@ -8,6 +8,21 @@ pragma solidity ^0.8.24;
  * @dev The heartbeat contract. Records proof of life for each user.
  *      Every check-in is an onchain timestamp. No heartbeat = signal lost.
  */
+interface ILastSignalBadges {
+    function mintBadge(address user, uint8 badgeType) external returns (uint256);
+}
+
+interface IPreviousCheckIn {
+    function getSignal(address user) external view returns (
+        uint256 lastCheckIn,
+        uint256 totalCheckIns,
+        uint256 currentStreak,
+        uint256 longestStreak,
+        uint256 joinedAt,
+        bool exists
+    );
+}
+
 contract CheckIn {
 
     // ── STRUCTS ──
@@ -40,10 +55,24 @@ contract CheckIn {
 
     mapping(address => UserSignal) private signals;
     mapping(address => bool) private ghostDeclared;
+    mapping(address => uint256) public signalPoints;
+    mapping(address => uint256) public ghostsCalled;
     address[] private allUsers;
+    ILastSignalBadges public badgeContract;
+    IPreviousCheckIn public previousCheckIn;
 
     uint256 public constant STREAK_WINDOW = 48 hours; // grace window for streak
     uint256 public constant GHOST_THRESHOLD = 30 days; // default ghost mode trigger
+    uint256 public constant GHOST_CALL_POINTS = 25;
+
+    uint8 private constant FIRST_SIGNAL = 1;
+    uint8 private constant THREE_DAY_SIGNAL = 2;
+    uint8 private constant SEVEN_DAY_SIGNAL = 3;
+    uint8 private constant FOURTEEN_DAY_SIGNAL = 4;
+    uint8 private constant THIRTY_DAY_LEGEND = 5;
+    uint8 private constant COMEBACK_SIGNAL = 6;
+    uint8 private constant GHOST_CALLER = 9;
+    uint8 private constant BACK_FROM_THE_DEAD = 10;
 
     // ── EVENTS ──
 
@@ -72,11 +101,44 @@ contract CheckIn {
         uint256 declaredAt
     );
 
+    event GhostCalled(
+        address indexed caller,
+        address indexed ghost,
+        uint256 pointsAwarded,
+        uint256 callerTotalPoints,
+        uint256 callerGhostsCalled
+    );
+
+    event BackFromTheDead(
+        address indexed user,
+        uint256 checkedInAt,
+        uint256 silenceDuration
+    );
+
+    event SignalMigrated(
+        address indexed user,
+        address indexed previousCheckIn,
+        uint256 lastCheckIn,
+        uint256 currentStreak,
+        uint256 totalCheckIns
+    );
+
     // ── ERRORS ──
 
     error AlreadyCheckedIn();
     error UserNotFound();
     error NotGhostYet();
+    error AlreadyMigrated();
+    error MigrationUnavailable();
+    error CannotDeclareSelf();
+
+    constructor(address _badgeContract, address _previousCheckIn) {
+        require(_badgeContract != address(0), "Invalid badge contract");
+        badgeContract = ILastSignalBadges(_badgeContract);
+        if (_previousCheckIn != address(0)) {
+            previousCheckIn = IPreviousCheckIn(_previousCheckIn);
+        }
+    }
 
     // ── MAIN FUNCTIONS ──
 
@@ -86,6 +148,9 @@ contract CheckIn {
      */
     function checkIn() external {
         UserSignal storage signal = signals[msg.sender];
+        bool comeback = false;
+        bool wasDeclaredGhost = false;
+        uint256 silenceBeforeCheckIn = 0;
 
         // First time checking in
         if (!signal.exists) {
@@ -95,6 +160,9 @@ contract CheckIn {
             signal.longestStreak = 1;
             allUsers.push(msg.sender);
         } else {
+            silenceBeforeCheckIn = _now() - signal.lastCheckIn;
+            wasDeclaredGhost = ghostDeclared[msg.sender];
+
             if (_now() < signal.lastCheckIn + 1 days) {
                 revert AlreadyCheckedIn();
             }
@@ -110,18 +178,66 @@ contract CheckIn {
                 // Streak broken
                 emit StreakBroken(msg.sender, _now(), signal.currentStreak);
                 signal.currentStreak = 1;
+                comeback = true;
             }
         }
 
         signal.lastCheckIn = _now();
         signal.totalCheckIns += 1;
         ghostDeclared[msg.sender] = false;
+        _awardHeartbeatBadges(msg.sender, signal.currentStreak, signal.totalCheckIns, comeback);
+        if (wasDeclaredGhost) {
+            try badgeContract.mintBadge(msg.sender, BACK_FROM_THE_DEAD) {} catch {}
+            emit BackFromTheDead(msg.sender, _now(), silenceBeforeCheckIn);
+        }
 
         emit HeartBeat(
             msg.sender,
             _now(),
             signal.currentStreak,
             signal.totalCheckIns
+        );
+    }
+
+    /**
+     * @notice Copy your signal from the previous CheckIn contract once.
+     * @dev Preserves streak timing and awards any milestone badges already earned.
+     */
+    function migrateMySignal() external {
+        if (address(previousCheckIn) == address(0)) revert MigrationUnavailable();
+
+        UserSignal storage signal = signals[msg.sender];
+        if (signal.exists) revert AlreadyMigrated();
+
+        (
+            uint256 lastCheckIn,
+            uint256 totalCheckIns,
+            uint256 currentStreak,
+            uint256 longestStreak,
+            uint256 joinedAt,
+            bool exists
+        ) = previousCheckIn.getSignal(msg.sender);
+
+        if (!exists) revert UserNotFound();
+
+        signals[msg.sender] = UserSignal({
+            lastCheckIn: lastCheckIn,
+            totalCheckIns: totalCheckIns,
+            currentStreak: currentStreak,
+            longestStreak: longestStreak,
+            joinedAt: joinedAt,
+            exists: true
+        });
+        allUsers.push(msg.sender);
+        ghostDeclared[msg.sender] = false;
+        _awardMilestoneBadges(msg.sender, currentStreak, totalCheckIns);
+
+        emit SignalMigrated(
+            msg.sender,
+            address(previousCheckIn),
+            lastCheckIn,
+            currentStreak,
+            totalCheckIns
         );
     }
 
@@ -189,13 +305,26 @@ contract CheckIn {
      * @notice Emit a ghost mode event for a user once they've gone dark
      */
     function declareGhost(address user) external returns (bool) {
+        if (user == msg.sender) revert CannotDeclareSelf();
+
         UserSignal storage signal = signals[user];
         if (!signal.exists) revert UserNotFound();
         if (_now() <= signal.lastCheckIn + GHOST_THRESHOLD) revert NotGhostYet();
         if (ghostDeclared[user]) return false;
 
         ghostDeclared[user] = true;
+        signalPoints[msg.sender] += GHOST_CALL_POINTS;
+        ghostsCalled[msg.sender] += 1;
+        try badgeContract.mintBadge(msg.sender, GHOST_CALLER) {} catch {}
+
         emit GhostModeEntered(user, signal.lastCheckIn, _now());
+        emit GhostCalled(
+            msg.sender,
+            user,
+            GHOST_CALL_POINTS,
+            signalPoints[msg.sender],
+            ghostsCalled[msg.sender]
+        );
         return true;
     }
 
@@ -259,5 +388,29 @@ contract CheckIn {
 
     function _min(uint256 a, uint256 b) private pure returns (uint256) {
         return a < b ? a : b;
+    }
+
+    function _awardHeartbeatBadges(
+        address user,
+        uint256 currentStreak,
+        uint256 totalCheckIns,
+        bool comeback
+    ) private {
+        _awardMilestoneBadges(user, currentStreak, totalCheckIns);
+        if (comeback) {
+            try badgeContract.mintBadge(user, COMEBACK_SIGNAL) {} catch {}
+        }
+    }
+
+    function _awardMilestoneBadges(
+        address user,
+        uint256 currentStreak,
+        uint256 totalCheckIns
+    ) private {
+        if (totalCheckIns >= 1) try badgeContract.mintBadge(user, FIRST_SIGNAL) {} catch {}
+        if (currentStreak >= 3) try badgeContract.mintBadge(user, THREE_DAY_SIGNAL) {} catch {}
+        if (currentStreak >= 7) try badgeContract.mintBadge(user, SEVEN_DAY_SIGNAL) {} catch {}
+        if (currentStreak >= 14) try badgeContract.mintBadge(user, FOURTEEN_DAY_SIGNAL) {} catch {}
+        if (currentStreak >= 30) try badgeContract.mintBadge(user, THIRTY_DAY_LEGEND) {} catch {}
     }
 }
