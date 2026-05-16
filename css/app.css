@@ -453,6 +453,24 @@
   color: var(--white);
 }
 
+.clickable {
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.clickable:hover {
+  opacity: 0.6;
+}
+
+.addr-link {
+  color: var(--purple-light);
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.addr-link:hover {
+  text-decoration: underline;
+  opacity: 0.8;
+}
+
 .unlock-warn {
   color: #e8a04a;
   font-family: "DM Mono", monospace;

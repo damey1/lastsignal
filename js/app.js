@@ -278,6 +278,15 @@ function explorerTxUrl(txHash) {
   return `https://explorer.ritualfoundation.org/tx/${txHash}`;
 }
 
+function explorerAddressUrl(addr) {
+  return `https://explorer.ritualfoundation.org/address/${addr}`;
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard?.writeText(text).catch(() => {});
+  return text;
+}
+
 async function gasEstimateLabel() {
   const fee = await state.provider.getFeeData();
   if (!fee.gasPrice) return "";
@@ -523,7 +532,6 @@ async function refreshSignal() {
         setStatus(ui.signalStatus, "Ready for today's heartbeat");
       }
     }
-    console.log("[refreshSignal] canCheckIn:", canCheckIn, "lastCheckIn:", asNumber(lastCheckIn), "now:", Math.floor(Date.now()/1000));
     ui.checkInButton.disabled = !canCheckIn;
   } catch (error) {
     setText(ui.signalScore, "0");
@@ -679,21 +687,32 @@ async function migrateSignal() {
 }
 
 async function checkGhostStatus() {
-  requireContracts();
-  const target = ui.ghostAddress.value.trim();
-  if (!ethers.isAddress(target)) throw new Error("Enter a valid wallet address");
-
   try {
+    requireContracts();
+    const target = ui.ghostAddress.value.trim();
+    if (!ethers.isAddress(target)) {
+      setStatus(ui.ghostStatus, "Enter a valid wallet address");
+      return;
+    }
+
     const [isGhost, silence] = await Promise.all([
       state.checkIn.isGhost(target, 0),
       state.checkIn.silenceDuration(target),
     ]);
     const daysSilent = Math.floor(asNumber(silence) / daySeconds);
     setStatus(ui.ghostStatus, isGhost
-      ? `${shortAddress(target)} is ghost eligible after ${daysSilent} silent days`
-      : `${shortAddress(target)} is not ghost yet — ${daysSilent} silent days`);
+      ? `${shortAddress(target)} is ghost eligible — ${daysSilent} days silent`
+      : `${shortAddress(target)} is not ghost yet — ${daysSilent} days silent`);
   } catch (error) {
-    setStatus(ui.ghostStatus, readableError(error));
+    const msg = readableError(error);
+    // Map contract errors to user-friendly messages
+    if (msg.includes("UserNotFound")) {
+      setStatus(ui.ghostStatus, "No heartbeat found for this address");
+    } else if (msg.includes("already checked in")) {
+      setStatus(ui.ghostStatus, "This user is active — no ghost declaration needed");
+    } else {
+      setStatus(ui.ghostStatus, msg);
+    }
   }
 }
 
@@ -754,6 +773,14 @@ async function sealMessage() {
       return tx.wait();
     }, ui.sealStatus);
     const messageId = findMessageId(receipt);
+    // Store tx hash in localStorage so message cards can link to the explorer
+    if (messageId) {
+      try {
+        const map = JSON.parse(localStorage.getItem("lastsignal.txByMsg") || "{}");
+        map[messageId.toLowerCase()] = receipt.hash;
+        localStorage.setItem("lastsignal.txByMsg", JSON.stringify(map));
+      } catch {}
+    }
     const link = explorerTxUrl(receipt.hash);
     ui.manageMessageId.value = messageId || "";
     setStatus(ui.sealStatus, messageId
@@ -830,20 +857,50 @@ function messageCard(vault, id, info, unlockable, mode, source) {
   if (info.canceled) item.classList.add("canceled");
 
   const messageId = document.createElement("div");
-  messageId.className = "message-id";
-  messageId.textContent = id;
+  messageId.className = "message-id clickable";
+  // Look up tx hash from localStorage
+  let txHash;
+  try { const map = JSON.parse(localStorage.getItem("lastsignal.txByMsg") || "{}"); txHash = map[id.toLowerCase()]; } catch {}
+  const msgLabel = id.length > 66 ? id.slice(0, 66) + "…" : id;
+  messageId.title = txHash ? "View sealing transaction in new tab" : "Click to copy";
+  if (txHash) {
+    const link = document.createElement("a");
+    link.href = explorerTxUrl(txHash);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = `🔗 ${msgLabel}`;
+    link.style.color = "var(--purple-light)";
+    link.style.textDecoration = "none";
+    messageId.appendChild(link);
+  } else {
+    messageId.textContent = msgLabel;
+    messageId.addEventListener("click", () => {
+      navigator.clipboard?.writeText(id).catch(() => {});
+      setStatus(ui.manageStatus, "Message ID copied");
+    });
+  }
   item.appendChild(messageId);
+
+  const addrTag = (label, addr) =>
+    `<span><a class="addr-link" href="${explorerAddressUrl(addr)}" target="_blank" rel="noopener" title="View on explorer (click to copy)">${label}: ${shortAddress(addr)}</a></span>`;
 
   const meta = document.createElement("div");
   meta.className = "message-meta";
   meta.innerHTML = `
-    <span>Recipient: ${shortAddress(info.recipient)}</span>
-    <span>Owner: ${shortAddress(info.owner)}</span>
+    ${addrTag("Recipient", info.recipient)}
+    ${addrTag("Owner", info.owner)}
     <span>Delay: ${secondsToDays(info.inactivityUnlock)} days</span>
     <span>Remaining: ${secondsToDays(info.silenceRemaining)} days</span>
     <span>Unlocked: ${info.unlocked ? "yes" : "no"}</span>
     <span>Canceled: ${info.canceled ? "yes" : "no"}</span>
   `;
+  // Clicking an address link also copies to clipboard
+  meta.querySelectorAll("a.addr-link").forEach(a => {
+    a.addEventListener("click", (e) => {
+      e.stopPropagation();
+      navigator.clipboard?.writeText(a.href.split("/address/")[1]).catch(() => {});
+    });
+  });
   item.appendChild(meta);
 
   const actions = document.createElement("div");
@@ -1039,8 +1096,26 @@ function readableError(error) {
   const msg = error?.shortMessage || error?.reason || error?.message || "Transaction failed";
 
   // Custom errors from CheckIn.sol
-  if (msg.includes("AlreadyCheckedIn") || msg.includes("unknown custom error")) {
+  if (msg.includes("AlreadyCheckedIn")) {
     return "Already checked in today — wait for the countdown to end";
+  }
+  if (msg.includes("UserNotFound")) {
+    return "No heartbeat found for this address";
+  }
+  if (msg.includes("NotGhostYet")) {
+    return "30 days of silence required before ghost declaration";
+  }
+  if (msg.includes("AlreadyMigrated")) {
+    return "Signal already migrated";
+  }
+  if (msg.includes("MigrationUnavailable")) {
+    return "Migration not available — previous CheckIn not configured";
+  }
+  if (msg.includes("CannotDeclareSelf")) {
+    return "You cannot declare yourself as ghost";
+  }
+  if (msg.includes("unknown custom error")) {
+    return "Transaction reverted — check wallet and try again";
   }
 
   // Catch insufficient funds and surface a clear message
