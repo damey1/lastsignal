@@ -18,7 +18,10 @@ const CHECKIN_ABI = [
   "error UserNotFound()",
   "error AlreadyMigrated()",
   "error MigrationUnavailable()",
-  "error CannotDeclareSelf()"
+  "error CannotDeclareSelf()",
+  "event StreakBroken(address indexed user,uint256 brokenAt,uint256 previousStreak)",
+  "event GhostModeEntered(address indexed user,uint256 lastSeen,uint256 declaredAt)",
+  "event BackFromTheDead(address indexed user,uint256 checkedInAt,uint256 silenceDuration)"
 ];
 
 const VAULT_ABI = [
@@ -33,7 +36,8 @@ const VAULT_ABI = [
   "function isUnlockable(bytes32 messageId) external view returns (bool)",
   "function claimMessage(bytes32 messageId) external",
   "function readMessage(bytes32 messageId) external view returns (string)",
-  "event MessageSealed(bytes32 indexed messageId,address indexed owner,address indexed recipient,uint256 unlockAfter,uint256 timestamp)"
+  "event MessageSealed(bytes32 indexed messageId,address indexed owner,address indexed recipient,uint256 unlockAfter,uint256 timestamp)",
+  "event MessageUnlocked(bytes32 indexed messageId,address indexed owner,address indexed recipient,uint256 inactiveDuration,uint256 unlockedAt)"
 ];
 
 const BADGE_ABI = [
@@ -405,26 +409,33 @@ function requireVault(vault = state.vault) {
 }
 
 async function switchToRitualChain() {
+  const manualMsg = "Chain ID: 1979 · RPC: https://rpc.ritualfoundation.org · Add manually in wallet settings";
+  setStatus(ui.signalStatus, "Requesting wallet...");
   try {
     await window.ethereum.request({
       method: "wallet_switchEthereumChain",
       params: [{ chainId: RITUAL_CHAIN_HEX }],
     });
   } catch (switchError) {
-    // 4902 = chain not added yet
-    if (switchError.code === 4902) {
-      await window.ethereum.request({
-        method: "wallet_addEthereumChain",
-        params: [{
-          chainId: RITUAL_CHAIN_HEX,
-          chainName: "Ritual Chain",
-          nativeCurrency: { name: "RITUAL", symbol: "RITUAL", decimals: 18 },
-          rpcUrls: ["https://rpc.ritualfoundation.org"],
-          blockExplorerUrls: ["https://explorer.ritualfoundation.org"],
-        }],
-      });
+    const code = switchError?.code ?? switchError?.data?.code;
+    if (code === 4902 || code === "4902") {
+      setStatus(ui.signalStatus, "Adding Ritual Chain...");
+      try {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: RITUAL_CHAIN_HEX,
+            chainName: "Ritual Chain",
+            nativeCurrency: { name: "RITUAL", symbol: "RITUAL", decimals: 18 },
+            rpcUrls: ["https://rpc.ritualfoundation.org"],
+            blockExplorerUrls: ["https://explorer.ritualfoundation.org"],
+          }],
+        });
+      } catch {
+        setStatus(ui.signalStatus, manualMsg);
+      }
     } else {
-      throw switchError;
+      setStatus(ui.signalStatus, manualMsg);
     }
   }
 }
@@ -445,8 +456,22 @@ async function connectWallet() {
   const onCorrectChain = Number(network.chainId) === RITUAL_CHAIN_ID;
 
   setText(ui.wallet, shortAddress(state.account));
-  setText(ui.network, onCorrectChain ? "Ritual Chain" : `Wrong chain (${network.chainId})`);
+  setText(ui.network, onCorrectChain ? "Ritual Chain" : `Wrong chain 🔄`);
   setText(ui.connect, "Connected");
+
+  // Make the network label clickable for chain switching
+  if (!onCorrectChain) {
+    ui.network.title = "Add / switch to Ritual Chain";
+    ui.network.innerHTML = "Wrong chain 🔄";
+    ui.network.style.cursor = "pointer";
+    ui.network.style.textDecoration = "underline dotted";
+    ui.network.onclick = () => {
+      switchToRitualChain();
+    };
+  } else {
+    ui.network.title = "";
+    ui.network.onclick = null;
+  }
 
   const warning = document.getElementById("chain-warning");
   if (warning) {
@@ -454,7 +479,7 @@ async function connectWallet() {
   }
 
   if (!onCorrectChain) {
-    setStatus(ui.signalStatus, "Wrong network — click the 'Switch →' button or switch in your wallet");
+    setStatus(ui.signalStatus, "Click 'Switch →' or 'Wrong chain 🔄' to auto-add, or add Chain 1979 (RPC ritualfoundation.org) manually");
     return;
   }
 
@@ -462,6 +487,8 @@ async function connectWallet() {
   if (_configReady) await _configReady;
   configureContracts();
   await refreshAll();
+  // Initialise notification feed
+  try { await initNotifs(state.checkIn, state.vault, state.account); } catch {}
 }
 
 async function refreshSignal() {
@@ -1179,7 +1206,7 @@ function bindEvents() {
         const warning = document.getElementById("chain-warning");
         if (warning) warning.style.display = "flex";
         setText(ui.network, "Wrong network");
-        setStatus(ui.signalStatus, "Switch to Ritual Chain (ID 1979) in your wallet");
+        setStatus(ui.signalStatus, "Click 'Switch →' to add/switch to Ritual Chain (ID 1979)");
       } else if (state.signer) {
         // Already on correct chain — just refresh data
         try { refreshAll(); } catch {}

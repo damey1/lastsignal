@@ -13,13 +13,18 @@
 <canvas id="bg-canvas"></canvas>
 
 <div id="chain-warning" class="chain-warning" style="display:none">
-  <span>⚠️ Wrong network — please switch to <strong>Ritual Chain (ID 1979)</strong></span>
+  <span>⚠️ <strong>Ritual Chain</strong> not detected — click <strong>Switch →</strong> or add Chain ID 1979 manually</span>
   <button id="switch-chain" class="chain-switch-btn">Switch →</button>
 </div>
 
 <nav>
   <a class="nav-logo nav-link" href="index.html">Last<span>Signal</span></a>
   <div class="nav-actions">
+    <div id="notif-bell" class="notif-bell" title="Notifications">
+      🔔
+      <span id="notif-dot" class="notif-dot" style="display:none"><span id="notif-count">0</span></span>
+      <div id="notif-list" class="notif-dropdown"></div>
+    </div>
     <span id="network-label" class="nav-tag">wallet offline</span>
     <button id="connect-wallet" class="app-button app-button-small">Connect</button>
   </div>
@@ -200,6 +205,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl-fast.min.js"></script>
+<script src="js/notify.js" defer></script>
 <script src="js/main.js" defer></script>
 <script src="js/app.js" defer></script>
 </body>
