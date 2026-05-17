@@ -487,8 +487,6 @@ async function connectWallet() {
   if (_configReady) await _configReady;
   configureContracts();
   await refreshAll();
-  // Initialise notification feed
-  try { await initNotifs(state.checkIn, state.vault, state.account); } catch {}
 }
 
 async function refreshSignal() {
@@ -1116,7 +1114,12 @@ async function refreshAllMessages() {
 
 async function refreshAll() {
   if (!state.checkIn || !state.vault) return;
-  await Promise.allSettled([refreshSignal(), refreshAllMessages(), refreshBadges()]);
+  await Promise.allSettled([
+    refreshSignal(),
+    refreshAllMessages(),
+    refreshBadges(),
+    refreshNotifs(state.checkIn, state.vault, state.account),
+  ]);
 }
 
 function readableError(error) {

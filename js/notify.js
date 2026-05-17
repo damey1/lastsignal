@@ -97,18 +97,44 @@ function _buildNotifs(account, events) {
 
 // ── Event fetcher ──
 
-async function fetchNotifs(checkIn, vault, account, fromBlock) {
+// Chunked eth_getLogs — Ritual RPC limits to 100k blocks per call
+async function _queryChunked(contract, filter, fromBlock, toBlock, chunkSize = 90000) {
+  const from = Number(fromBlock);
+  const to = Number(toBlock);
+  const results = [];
+  for (let start = from; start <= to; start += chunkSize) {
+    const end = Math.min(start + chunkSize - 1, to);
+    try {
+      const chunk = await contract.queryFilter(filter, start, end);
+      results.push(...chunk);
+    } catch {
+      // RPC may reject the range; skip silently
+    }
+  }
+  return results;
+}
+
+async function fetchNotifs(checkIn, vault, account) {
   if (!checkIn || !vault || !account) return [];
 
-  const filter = { address: account };
+  const lastQueried = Number(localStorage.getItem("lastsignal.notifLastBlock") || "0");
+  const latest = await checkIn.runner.provider.getBlockNumber().catch(() => 0);
+  if (latest < 1) return [];
+
+  // First query: scan last 500k blocks (~6 days at 1s/block) to catch all testnet history.
+  // Subsequent queries: only scan new blocks since last fetch.
+  const from = lastQueried > 0 ? lastQueried + 1 : Math.max(1, latest - 500000);
+  const to = latest;
 
   const [sealed, unlocked, ghosted, broken, back] = await Promise.all([
-    vault.queryFilter(vault.filters.MessageSealed(null, null, account), fromBlock).catch(() => []),
-    vault.queryFilter(vault.filters.MessageUnlocked(null, account), fromBlock).catch(() => []),
-    checkIn.queryFilter(checkIn.filters.GhostModeEntered(account), fromBlock).catch(() => []),
-    checkIn.queryFilter(checkIn.filters.StreakBroken(account), fromBlock).catch(() => []),
-    checkIn.queryFilter(checkIn.filters.BackFromTheDead(account), fromBlock).catch(() => []),
+    _queryChunked(vault, vault.filters.MessageSealed(null, null, account), from, to),
+    _queryChunked(vault, vault.filters.MessageUnlocked(null, account), from, to),
+    _queryChunked(checkIn, checkIn.filters.GhostModeEntered(account), from, to),
+    _queryChunked(checkIn, checkIn.filters.StreakBroken(account), from, to),
+    _queryChunked(checkIn, checkIn.filters.BackFromTheDead(account), from, to),
   ]);
+
+  localStorage.setItem("lastsignal.notifLastBlock", String(latest));
 
   return _buildNotifs(account, {
     messageSealed: sealed,
@@ -154,20 +180,28 @@ function renderNotifBell(notifs, seenTs) {
 
 async function initNotifs(checkIn, vault, account) {
   const seenRaw = localStorage.getItem(NOTIF_LS_KEY);
-  const seenBlock = 0; // start from block 0 on first load
+  const seenTs = seenRaw ? Number(seenRaw) : Math.floor(Date.now() / 1000);
+  const list = document.getElementById("notif-list");
+  if (list) list.innerHTML = '<div class="notif-empty">Loading...</div>';
 
-  const notifs = await fetchNotifs(checkIn, vault, account, seenBlock);
-  const seenTs = seenRaw ? Number(seenRaw) : Date.now() / 1000;
+  const notifs = await fetchNotifs(checkIn, vault, account);
   renderNotifBell(notifs, seenTs);
 
-  // Mark as seen on bell click
   const bell = document.getElementById("notif-bell");
   if (bell) {
-    bell.onclick = () => {
+    bell.addEventListener("click", () => {
       const latest = notifs.length > 0 ? notifs[0].sortKey : Math.floor(Date.now() / 1000);
       localStorage.setItem(NOTIF_LS_KEY, String(latest));
       const dot = document.getElementById("notif-dot");
       if (dot) dot.style.display = "none";
-    };
+    });
   }
+}
+
+async function refreshNotifs(checkIn, vault, account) {
+  if (!checkIn || !vault || !account) return;
+  const seenRaw = localStorage.getItem(NOTIF_LS_KEY);
+  const seenTs = seenRaw ? Number(seenRaw) : Math.floor(Date.now() / 1000);
+  const notifs = await fetchNotifs(checkIn, vault, account);
+  renderNotifBell(notifs, seenTs);
 }
