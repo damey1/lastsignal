@@ -306,8 +306,7 @@ function setText(node, text) {
 function setBusy(button, busy) {
   if (!button) return;
   button.classList.toggle("is-loading", busy);
-  if (!busy) return; // don't re-enable — caller decides disabled state
-  button.disabled = true;
+  button.disabled = busy;
 }
 
 function setStatus(node, text) {
