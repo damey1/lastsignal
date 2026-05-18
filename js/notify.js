@@ -237,18 +237,22 @@ function _wirePushToggle(toggle) {
       }
       const perm = await Notification.requestPermission();
       if (perm !== "granted") {
-        toggle.textContent = "⚠️ Permission denied";
+        toggle.textContent = perm === "denied" ? "⚠️ Notifications blocked" : "⚠️ Permission not granted";
         return;
       }
       const reg = await navigator.serviceWorker.register("/sw.js");
-      toggle.textContent = "✅ Push enabled";
-      toggle.disabled = true;
-      const pushSub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: VAPID_PUBLIC_KEY,
-      });
+      // Reuse existing subscription if available
+      let pushSub = await reg.pushManager.getSubscription();
+      if (pushSub) {
+        toggle.textContent = "📤 Syncing...";
+      } else {
+        toggle.textContent = "⏳ Connecting...";
+        pushSub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: VAPID_PUBLIC_KEY,
+        });
+      }
       localStorage.setItem("lastsignal.pushSub", JSON.stringify(pushSub));
-      // Send subscription to the notification service
       try {
         await fetch("/subscribe", {
           method: "POST",
@@ -256,8 +260,10 @@ function _wirePushToggle(toggle) {
           body: JSON.stringify({ address: window._state?.account, subscription: pushSub.toJSON() }),
         });
       } catch {}
+      toggle.textContent = "✅ Push enabled";
+      toggle.disabled = true;
     } catch (err) {
-      toggle.textContent = "❌ Push not available";
+      toggle.textContent = "❌ Push setup failed";
       console.warn("Push setup failed:", err);
     }
   });

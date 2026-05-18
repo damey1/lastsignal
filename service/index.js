@@ -115,11 +115,15 @@ createServer((req, res) => {
         const addr = address.toLowerCase();
         const subs = loadSubs();
         if (!subs[addr]) subs[addr] = [];
-        subs[addr].push(subscription);
+        // Dedup by endpoint
+        const exists = subs[addr].some(s => s.endpoint === subscription.endpoint);
+        if (!exists) {
+          subs[addr].push(subscription);
+          console.log(`  ✓ Subscription saved for ${address.slice(0, 6)}…`);
+        }
         saveSubs(subs);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
-        console.log(`  ✓ Subscription saved for ${address.slice(0, 6)}…`);
       } catch (err) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: err.message }));
@@ -188,6 +192,8 @@ async function deliver(notif, subs, txHash) {
   const key = Object.keys(subs).find(k => k.toLowerCase() === notif.target.toLowerCase());
   if (!key) return;
 
+  let changed = false;
+  const valid = [];
   for (const sub of subs[key]) {
     try {
       await webpush.sendNotification(sub, JSON.stringify({
@@ -197,9 +203,21 @@ async function deliver(notif, subs, txHash) {
         data: { type: notif.type, tx: txHash || "" },
       }));
       console.log(`  ✓ Push sent to ${notif.target.slice(0, 6)}…`);
+      valid.push(sub);
     } catch (err) {
-      console.error(`  ✗ Push failed for ${notif.target.slice(0, 6)}…: ${err.message}`);
+      const status = err.statusCode;
+      if (status === 410 || status === 404 || status === 403) {
+        console.log(`  ✗ Removing stale subscription for ${notif.target.slice(0, 6)}… (${status})`);
+        changed = true;
+      } else {
+        console.error(`  ✗ Push failed for ${notif.target.slice(0, 6)}…: ${err.message}`);
+        valid.push(sub); // keep — transient error
+      }
     }
+  }
+  if (changed) {
+    subs[key] = valid;
+    saveSubs(subs);
   }
 }
 
@@ -240,5 +258,35 @@ async function run() {
 
   console.log("\n✅ Indexer running. Waiting for events...\n");
 }
+
+// Periodic stale subscription cleanup (every hour)
+async function cleanupStaleSubs() {
+  const subs = loadSubs();
+  let changed = false;
+  for (const [addr, list] of Object.entries(subs)) {
+    const valid = [];
+    for (const sub of list) {
+      try {
+        await webpush.sendNotification(sub, JSON.stringify({
+          title: "LastSignal", body: "🔔 Heartbeat — subscription active",
+        }));
+        valid.push(sub);
+      } catch (err) {
+        const status = err.statusCode;
+        if (status === 410 || status === 404 || status === 403) {
+          console.log(`  Cleanup: removed stale sub for ${addr.slice(0, 6)}… (${status})`);
+          changed = true;
+        } else {
+          valid.push(sub);
+        }
+      }
+    }
+    subs[addr] = valid;
+  }
+  if (changed) saveSubs(subs);
+  console.log("  Cleanup: done");
+}
+
+setInterval(cleanupStaleSubs, 3600000); // every hour
 
 run().catch(console.error);
