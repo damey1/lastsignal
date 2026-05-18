@@ -15,6 +15,17 @@
 const NOTIF_LS_KEY = "lastsignal.notifSeen";
 const NOTIF_MAX = 20;
 
+// VAPID public key for Web Push (from .env / service setup-keys.js)
+const VAPID_PUBLIC_KEY = urlBase64ToUint8Array(
+  "BKOH3GLLQ4mJvVA0NBgYV_IL47LEmtJYf0baHQF6gAExIOW2uNfSw-8eV_vhDko7vnn3Dmc6zSEtBliUHwc8xVg"
+);
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const b64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
 // ── Helpers ──
 
 function _notifTime(ts) {
@@ -161,10 +172,8 @@ function renderNotifBell(notifs, seenTs) {
   list.innerHTML = "";
   if (notifs.length === 0) {
     list.innerHTML = '<div class="notif-empty">No notifications</div>';
-    return;
-  }
-
-  for (const n of notifs) {
+  } else {
+    for (const n of notifs) {
     const el = document.createElement("a");
     el.className = "notif-item";
     el.href = n.tx ? `https://explorer.ritualfoundation.org/tx/${n.tx}` : "#";
@@ -174,6 +183,24 @@ function renderNotifBell(notifs, seenTs) {
     if (n.sortKey > seenTs) el.classList.add("notif-new");
     list.appendChild(el);
   }
+  } // end else
+
+  // Append push toggle below notifications
+  const toggleContainer = document.createElement("div");
+  toggleContainer.className = "notif-push-toggle";
+  const toggleBtn = document.createElement("button");
+  toggleBtn.id = "enable-push";
+  toggleBtn.className = "push-btn";
+  const sub = localStorage.getItem("lastsignal.pushSub");
+  if (sub) {
+    toggleBtn.textContent = "✅ Push enabled";
+    toggleBtn.disabled = true;
+  } else {
+    toggleBtn.textContent = "🔔 Enable push";
+    _wirePushToggle(toggleBtn);
+  }
+  toggleContainer.appendChild(toggleBtn);
+  list.appendChild(toggleContainer);
 }
 
 // ── Initialise ──
@@ -198,6 +225,44 @@ async function initNotifs(checkIn, vault, account) {
   }
 }
 
+// ── Push Notifications ──
+
+function _wirePushToggle(toggle) {
+  toggle.addEventListener("click", async () => {
+    toggle.textContent = "⏳ Subscribing...";
+    try {
+      if (typeof Notification === "undefined") {
+        toggle.textContent = "❌ Notifications not supported";
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") {
+        toggle.textContent = "⚠️ Permission denied";
+        return;
+      }
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      toggle.textContent = "✅ Push enabled";
+      toggle.disabled = true;
+      const pushSub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: VAPID_PUBLIC_KEY,
+      });
+      localStorage.setItem("lastsignal.pushSub", JSON.stringify(pushSub));
+      // Send subscription to the notification service
+      try {
+        await fetch("/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ address: window._state?.account, subscription: pushSub.toJSON() }),
+        });
+      } catch {}
+    } catch (err) {
+      toggle.textContent = "❌ Push not available";
+      console.warn("Push setup failed:", err);
+    }
+  });
+}
+
 async function refreshNotifs(checkIn, vault, account) {
   if (!checkIn || !vault || !account) return;
   const seenRaw = localStorage.getItem(NOTIF_LS_KEY);
@@ -205,3 +270,6 @@ async function refreshNotifs(checkIn, vault, account) {
   const notifs = await fetchNotifs(checkIn, vault, account);
   renderNotifBell(notifs, seenTs);
 }
+
+// Boot: show empty bell immediately, no wallet needed
+renderNotifBell([], 0);

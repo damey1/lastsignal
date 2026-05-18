@@ -188,7 +188,7 @@ function isEncryptedPayload(str) {
   } catch { return false; }
 }
 
-const state = {
+window._state = {
   provider: null,
   signer: null,
   account: null,
@@ -198,6 +198,7 @@ const state = {
   badges: null,
   ownerKey: null,
 };
+const state = window._state;
 
 const $ = (id) => document.getElementById(id);
 

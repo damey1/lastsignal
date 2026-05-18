@@ -546,6 +546,28 @@
   white-space: nowrap;
 }
 
+.notif-push-toggle {
+  border-top: 1px solid rgba(124,92,191,0.15);
+  padding: 8px 14px;
+}
+
+.push-btn {
+  width: 100%;
+  background: rgba(124,92,191,0.15);
+  border: 1px solid rgba(124,92,191,0.35);
+  border-radius: 4px;
+  color: var(--white);
+  cursor: pointer;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  padding: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: background 0.2s;
+}
+.push-btn:hover { background: rgba(124,92,191,0.25); }
+.push-btn:disabled { opacity: 0.5; cursor: default; }
+
 .notif-empty {
   padding: 20px;
   text-align: center;
