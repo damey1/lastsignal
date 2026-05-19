@@ -546,6 +546,23 @@
   white-space: nowrap;
 }
 
+.notif-email-input {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(124,92,191,0.3);
+  border-radius: 4px;
+  color: var(--white);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  padding: 7px 10px;
+  outline: none;
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+.notif-email-input:focus {
+  border-color: var(--purple-light);
+}
+
 .notif-push-toggle {
   border-top: 1px solid rgba(124,92,191,0.15);
   padding: 8px 14px;

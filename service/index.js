@@ -20,6 +20,7 @@ import { fileURLToPath } from "url";
 import { dirname, join, resolve, extname } from "path";
 
 dotenv.config();
+dotenv.config({ path: join(__dirname, ".env") }); // also load service/.env
 
 // VAPID keys for Web Push
 webpush.setVapidDetails(
@@ -29,6 +30,23 @@ webpush.setVapidDetails(
 );
 
 const WSS_URL = process.env.RITUAL_WSS_URL || "wss://rpc.ritualfoundation.org/ws";
+
+// Email transport — SendGrid (SMTP)
+// Get API key at https://app.sendgrid.com/settings/api_keys
+import nodemailer from "nodemailer";
+let _mailer = null;
+function getMailer() {
+  const apiKey = process.env.SENDGRID_API_KEY;
+  if (!_mailer && apiKey) {
+    _mailer = nodemailer.createTransport({
+      host: "smtp.sendgrid.net",
+      port: 587,
+      secure: false,
+      auth: { user: "apikey", pass: apiKey },
+    });
+  }
+  return _mailer;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -71,17 +89,19 @@ const vault = new ethers.Contract(deployed.messageVault, VAULT_EVENTS, provider)
 // ── Subscription Store ──
 
 const SUBS_PATH = join(__dirname, "subscriptions.json");
+const EMAIL_PATH = join(__dirname, "emails.json");
 
 function loadSubs() {
-  try {
-    return JSON.parse(readFileSync(SUBS_PATH, "utf8"));
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(readFileSync(SUBS_PATH, "utf8")); } catch { return {}; }
 }
-
 function saveSubs(subs) {
   writeFileSync(SUBS_PATH, JSON.stringify(subs, null, 2));
+}
+function loadEmails() {
+  try { return JSON.parse(readFileSync(EMAIL_PATH, "utf8")); } catch { return {}; }
+}
+function saveEmails(emails) {
+  writeFileSync(EMAIL_PATH, JSON.stringify(emails, null, 2));
 }
 
 // ── HTTP server (frontend + API) ──
@@ -122,6 +142,28 @@ createServer((req, res) => {
           console.log(`  ✓ Subscription saved for ${address.slice(0, 6)}…`);
         }
         saveSubs(subs);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+  } else if (req.method === "POST" && req.url === "/subscribe-email") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        const { address, email } = JSON.parse(body);
+        if (!address || !email || !email.includes("@")) throw new Error("Invalid request");
+        const addr = address.toLowerCase();
+        const emails = loadEmails();
+        if (!emails[addr]) emails[addr] = [];
+        if (!emails[addr].includes(email)) {
+          emails[addr].push(email);
+          console.log(`  ✓ Email registered ${email} for ${addr.slice(0, 6)}…`);
+        }
+        saveEmails(emails);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
@@ -189,35 +231,58 @@ function formatEvent(eventName, args) {
 // ── Delivery ──
 
 async function deliver(notif, subs, txHash) {
-  const key = Object.keys(subs).find(k => k.toLowerCase() === notif.target.toLowerCase());
-  if (!key) return;
+  const addr = notif.target.toLowerCase();
+  const key = Object.keys(subs).find(k => k.toLowerCase() === addr);
 
-  let changed = false;
-  const valid = [];
-  for (const sub of subs[key]) {
-    try {
-      await webpush.sendNotification(sub, JSON.stringify({
-        title: "LastSignal",
-        body: notif.msg,
-        icon: "/favicon.ico",
-        data: { type: notif.type, tx: txHash || "" },
-      }));
-      console.log(`  ✓ Push sent to ${notif.target.slice(0, 6)}…`);
-      valid.push(sub);
-    } catch (err) {
-      const status = err.statusCode;
-      if (status === 410 || status === 404 || status === 403) {
-        console.log(`  ✗ Removing stale subscription for ${notif.target.slice(0, 6)}… (${status})`);
-        changed = true;
-      } else {
-        console.error(`  ✗ Push failed for ${notif.target.slice(0, 6)}…: ${err.message}`);
-        valid.push(sub); // keep — transient error
+  // Push delivery
+  if (key) {
+    let changed = false;
+    const valid = [];
+    for (const sub of subs[key]) {
+      try {
+        await webpush.sendNotification(sub, JSON.stringify({
+          title: "LastSignal",
+          body: notif.msg,
+          icon: "/favicon.ico",
+          data: { type: notif.type, tx: txHash || "" },
+        }));
+        console.log(`  ✓ Push sent to ${addr.slice(0, 6)}…`);
+        valid.push(sub);
+      } catch (err) {
+        if (err.statusCode === 410 || err.statusCode === 404 || err.statusCode === 403) {
+          console.log(`  ✗ Removing stale sub for ${addr.slice(0, 6)}… (${err.statusCode})`);
+          changed = true;
+        } else {
+          console.error(`  ✗ Push failed for ${addr.slice(0, 6)}…: ${err.message}`);
+          valid.push(sub);
+        }
       }
     }
+    if (changed) { subs[key] = valid; saveSubs(subs); }
   }
-  if (changed) {
-    subs[key] = valid;
-    saveSubs(subs);
+
+  // Email delivery
+  const mailer = getMailer();
+  if (!mailer) return;
+  const emails = loadEmails();
+  const emailList = emails[addr];
+  if (!emailList?.length) return;
+
+  const txLink = txHash ? `https://explorer.ritualfoundation.org/tx/${txHash}` : "";
+  const html = `<p>${notif.msg}</p>${txLink ? `<p><a href="${txLink}">View transaction</a></p>` : ""}<p style="color:#888;font-size:12px;">LastSignal — your EchoLife onchain</p>`;
+
+  for (const email of emailList) {
+    try {
+      await mailer.sendMail({
+        from: process.env.SMTP_FROM || "noreply@lastsignal.xyz",
+        to: email,
+        subject: `LastSignal – ${notif.msg.replace(/<[^>]+>/g, "").slice(0, 60)}`,
+        html,
+      });
+      console.log(`  ✓ Email sent to ${email}`);
+    } catch (err) {
+      console.error(`  ✗ Email failed for ${email}: ${err.message}`);
+    }
   }
 }
 

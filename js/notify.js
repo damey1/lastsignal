@@ -201,6 +201,50 @@ function renderNotifBell(notifs, seenTs) {
   }
   toggleContainer.appendChild(toggleBtn);
   list.appendChild(toggleContainer);
+
+  // Email subscription section
+  const emailContainer = document.createElement("div");
+  emailContainer.className = "notif-push-toggle";
+  const storedEmail = localStorage.getItem("lastsignal.email");
+  if (storedEmail) {
+    const label = document.createElement("span");
+    label.className = "push-btn";
+    label.style.display = "block";
+    label.style.textAlign = "center";
+    label.style.opacity = "0.6";
+    label.textContent = `📧 ${storedEmail}`;
+    label.disabled = true;
+    emailContainer.appendChild(label);
+  } else {
+    const emailInput = document.createElement("input");
+    emailInput.type = "email";
+    emailInput.placeholder = "your@email.com";
+    emailInput.className = "notif-email-input";
+    const emailBtn = document.createElement("button");
+    emailBtn.className = "push-btn";
+    emailBtn.textContent = "📧 Notify by email";
+    emailBtn.addEventListener("click", async () => {
+      const email = emailInput.value.trim();
+      if (!email || !email.includes("@")) { emailInput.style.borderColor = "#e74c3c"; return; }
+      emailBtn.textContent = "⏳ Saving...";
+      try {
+        await fetch("/subscribe-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ address: window._state?.account, email }),
+        });
+        localStorage.setItem("lastsignal.email", email);
+        emailBtn.textContent = "✅ Email saved";
+        emailBtn.disabled = true;
+        emailInput.style.display = "none";
+      } catch {
+        emailBtn.textContent = "❌ Failed";
+      }
+    });
+    emailContainer.appendChild(emailInput);
+    emailContainer.appendChild(emailBtn);
+  }
+  list.appendChild(emailContainer);
 }
 
 // ── Initialise ──
