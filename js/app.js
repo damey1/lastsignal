@@ -24,6 +24,10 @@ const CHECKIN_ABI = [
   "event BackFromTheDead(address indexed user,uint256 checkedInAt,uint256 silenceDuration)"
 ];
 
+const SCHEDULER_ABI = [
+  "function scheduleCheckIns(address user,uint256 forGhostCheckAt,uint256 forNudgeAt) external returns (bytes32,bytes32)",
+];
+
 const VAULT_ABI = [
   "function sealMessage(address recipient,string encryptedContent,uint256 inactivityUnlock) external returns (bytes32)",
   "function getMyMessages() external view returns (bytes32[])",
@@ -679,6 +683,10 @@ async function sendCheckIn() {
     }, ui.signalStatus);
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.signalStatus, `Heartbeat confirmed — ${link}`);
+
+    // Schedule ghost check + streak nudge via Ritual Scheduler
+    try { await _scheduleAfterCheckIn(receipt.blockNumber); } catch (e) { console.warn("Scheduler skip:", e); }
+
     setBusy(ui.checkInButton, false);
     await refreshAll();
   } catch (error) {
@@ -687,6 +695,26 @@ async function sendCheckIn() {
     try { await refreshSignal(); } catch {}
     setBusy(ui.checkInButton, false);
   }
+}
+
+// ── Ritual Scheduler: schedule ghost check + streak nudge after check-in ──
+
+async function _scheduleAfterCheckIn(checkInBlock) {
+  const schedulerAddr = state.deployed?.schedulerNotifications;
+  if (!schedulerAddr || !state.signer) return;
+
+  const BLOCKS_PER_DAY = 246857n; // ~350ms block time on Ritual
+  const currentBlock = BigInt(checkInBlock);
+
+  const scheduler = new ethers.Contract(schedulerAddr, SCHEDULER_ABI, state.signer);
+  const ghostBlock = currentBlock + BLOCKS_PER_DAY * 30n;
+  const nudgeBlock = currentBlock + BLOCKS_PER_DAY * 29n;
+
+  const gas = await gasEstimateLabel();
+  setStatus(ui.signalStatus, `Scheduling ghost check... ${gas}`.trim());
+  const tx = await scheduler.scheduleCheckIns(state.account, ghostBlock, nudgeBlock);
+  await tx.wait();
+  setStatus(ui.signalStatus, `✅ Ghost check scheduled`);
 }
 
 async function migrateSignal() {

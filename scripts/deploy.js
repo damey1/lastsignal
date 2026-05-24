@@ -63,11 +63,40 @@ async function main() {
   await (await badges.setMinter(vaultAddress, true)).wait();
   console.log("✅ Badge minters authorized\n");
 
+  // ── Deploy SchedulerNotifications ──
+  console.log("⏰ Deploying SchedulerNotifications.sol...");
+  const SchedulerNotifications = await ethers.getContractFactory("SchedulerNotifications");
+  const scheduler = await SchedulerNotifications.deploy(checkInAddress);
+  await scheduler.waitForDeployment();
+  const schedulerAddress = await scheduler.getAddress();
+  console.log(`✅ SchedulerNotifications deployed: ${schedulerAddress}\n`);
+
+  // ── Fund RitualWallet for scheduler fees ──
+  console.log("💰 Funding RitualWallet for scheduler fees...");
+  const RITUAL_WALLET = "0x532F0dF0896F353d8C3DD8cc134e8129DA2a3948";
+  const depositAmount = ethers.parseEther("0.01");
+  const lockDuration = 1_000_000; // blocks (~4 days at 350ms/block)
+  const ritualWalletABI = ["function deposit(uint256 lockDuration) external payable"];
+  const ritualWallet = new ethers.Contract(RITUAL_WALLET, ritualWalletABI, deployer);
+  try {
+    const tx = await ritualWallet.deposit(lockDuration, { value: depositAmount });
+    await tx.wait();
+    console.log(`✅ RitualWallet funded: ${ethers.formatEther(depositAmount)} RITUAL (locked ${lockDuration} blocks)\n`);
+  } catch (err) {
+    console.warn(`⚠️ RitualWallet funding skipped: ${err.message}\n`);
+  }
+
+  // ── Authorize scheduler contract with CheckIn ──
+  console.log("🔑 Transferring scheduler ownership to deployer...");
+  // Already owned by deployer from constructor
+  console.log("✅ SchedulerNotifications ready\n");
+
   // ── Write deployed.json ──
   const deployedJson = {
     badges: badgesAddress,
     checkIn: checkInAddress,
     messageVault: vaultAddress,
+    schedulerNotifications: schedulerAddress,
     previousCheckIn: previousCheckInAddress !== ethers.ZeroAddress ? previousCheckInAddress : undefined,
     network: network.name,
   };
@@ -81,6 +110,7 @@ async function main() {
   console.log(`  Badges:       ${badgesAddress}`);
   console.log(`  CheckIn:      ${checkInAddress}`);
   console.log(`  MessageVault: ${vaultAddress}`);
+  console.log(`  Scheduler:    ${schedulerAddress}`);
   console.log(`  Network:      ${network.name}`);
   console.log(`  Explorer:     https://explorer.ritualfoundation.org`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
