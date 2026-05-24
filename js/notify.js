@@ -17,7 +17,7 @@ const NOTIF_MAX = 20;
 
 // VAPID public key for Web Push (from .env / service setup-keys.js)
 const VAPID_PUBLIC_KEY = urlBase64ToUint8Array(
-  "BKOH3GLLQ4mJvVA0NBgYV_IL47LEmtJYf0baHQF6gAExIOW2uNfSw-8eV_vhDko7vnn3Dmc6zSEtBliUHwc8xVg"
+  "BEy9l0IWwlzcs8Cj1LRZ9AAvYh8MyR3Yf3p0H5m0SvCNxDnjdZaDof9PP1C8NOX4jOhKeqM-QYBTOlHlFOZJsec"
 );
 
 function urlBase64ToUint8Array(base64String) {

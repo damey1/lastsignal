@@ -1,5 +1,8 @@
 # Environment variables - NEVER commit this
 .env*
+!/service/.env.example
+/service/.env
+/service/.env.local
 
 # Hardhat
 node_modules
