@@ -23,3 +23,6 @@ Thumbs.db
 # IDE
 .vscode
 .idea
+
+# Agents (empty dir — external tool config)
+.agents/

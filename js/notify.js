@@ -226,13 +226,23 @@ function renderNotifBell(notifs, seenTs) {
     emailBtn.addEventListener("click", async () => {
       const email = emailInput.value.trim();
       if (!email || !email.includes("@")) { emailInput.style.borderColor = "#e74c3c"; return; }
-      emailBtn.textContent = "⏳ Saving...";
+      const account = window._state?.account;
+      const signer = window._state?.signer;
+      if (!account || !signer) {
+        emailBtn.textContent = "❌ Connect wallet first";
+        return;
+      }
+      emailBtn.textContent = "⏳ Signing...";
       try {
-        await fetch("/subscribe-email", {
+        const message = `LastSignal email subscription\n${email}\n${account}`;
+        const signature = await signer.signMessage(message);
+        emailBtn.textContent = "⏳ Saving...";
+        const res = await fetch("/subscribe-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address: window._state?.account, email }),
+          body: JSON.stringify({ address: account, email, signature, message }),
         });
+        if (!res.ok) throw new Error("Server rejected");
         localStorage.setItem("lastsignal.email", email);
         emailBtn.textContent = "✅ Email saved";
         emailBtn.disabled = true;

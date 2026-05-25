@@ -118,6 +118,25 @@ const MIME = {
 
 const WWW_ROOT = join(__dirname, "..");
 const SUB_PORT = 3002;
+
+// ── Rate limiter (in-memory, per IP) ──
+
+const RATE_LIMIT_WINDOW_MS = 60_000;  // 1 minute
+const RATE_LIMIT_MAX = 10;            // requests per window
+const rateLimitMap = new Map();
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const window = rateLimitMap.get(ip) || [];
+  const recent = window.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_MAX) return true;
+  recent.push(now);
+  rateLimitMap.set(ip, recent);
+  return false;
+}
+
+const MAX_BODY_SIZE = 10_240; // 10 KB
+
 createServer((req, res) => {
   // CORS headers for localhost frontend
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -126,8 +145,20 @@ createServer((req, res) => {
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
   if (req.method === "POST" && req.url === "/subscribe") {
+    if (isRateLimited(req.socket.remoteAddress)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Too many requests" }));
+      return;
+    }
     let body = "";
-    req.on("data", (c) => (body += c));
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > MAX_BODY_SIZE) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Request too large" }));
+        req.destroy();
+      }
+    });
     req.on("end", () => {
       try {
         const { address, subscription } = JSON.parse(body);
@@ -150,12 +181,33 @@ createServer((req, res) => {
       }
     });
   } else if (req.method === "POST" && req.url === "/subscribe-email") {
+    if (isRateLimited(req.socket.remoteAddress)) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Too many requests" }));
+      return;
+    }
     let body = "";
-    req.on("data", (c) => (body += c));
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > MAX_BODY_SIZE) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Request too large" }));
+        req.destroy();
+      }
+    });
     req.on("end", () => {
       try {
-        const { address, email } = JSON.parse(body);
-        if (!address || !email || !email.includes("@")) throw new Error("Invalid request");
+        const { address, email, signature, message } = JSON.parse(body);
+        if (!address || !email || !email.includes("@") || !signature || !message) {
+          throw new Error("Invalid request — address, email, signature, and message are required");
+        }
+        // Recover signer from signature and verify it matches the claimed address
+        const recovered = ethers.verifyMessage(message, signature);
+        if (recovered.toLowerCase() !== address.toLowerCase()) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Signature does not match the claimed address" }));
+          return;
+        }
         const addr = address.toLowerCase();
         const normalizedEmail = email.toLowerCase().trim();
         const emails = loadEmails();
