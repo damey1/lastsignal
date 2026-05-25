@@ -2,7 +2,9 @@
  * LastSignal — Service Worker for push notifications
  */
 self.addEventListener("push", (event) => {
-  const data = event.data?.json() ?? { title: "LastSignal", body: "" };
+  const data = event.data?.json();
+  // Skip silent cleanup pings (no body = not a real notification)
+  if (!data || !data.body) return;
 
   const options = {
     body: data.body,

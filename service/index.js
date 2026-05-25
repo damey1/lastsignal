@@ -157,11 +157,12 @@ createServer((req, res) => {
         const { address, email } = JSON.parse(body);
         if (!address || !email || !email.includes("@")) throw new Error("Invalid request");
         const addr = address.toLowerCase();
+        const normalizedEmail = email.toLowerCase().trim();
         const emails = loadEmails();
         if (!emails[addr]) emails[addr] = [];
-        if (!emails[addr].includes(email)) {
-          emails[addr].push(email);
-          console.log(`  ✓ Email registered ${email} for ${addr.slice(0, 6)}…`);
+        if (!emails[addr].includes(normalizedEmail)) {
+          emails[addr].push(normalizedEmail);
+          console.log(`  ✓ Email registered ${normalizedEmail} for ${addr.slice(0, 6)}…`);
         }
         saveEmails(emails);
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -332,9 +333,9 @@ async function cleanupStaleSubs() {
     const valid = [];
     for (const sub of list) {
       try {
-        await webpush.sendNotification(sub, JSON.stringify({
-          title: "LastSignal", body: "🔔 Heartbeat — subscription active",
-        }));
+        // Send empty payload to check if subscription is still valid.
+        // The service worker skips notifications with no body — user sees nothing.
+        await webpush.sendNotification(sub, JSON.stringify({ ping: true }));
         valid.push(sub);
       } catch (err) {
         const status = err.statusCode;
