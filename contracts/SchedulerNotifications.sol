@@ -155,11 +155,11 @@ contract SchedulerNotifications {
     // ── Internal ──
 
     function _safeLastSeen(address user) private view returns (uint256) {
-        (bool ok, bytes memory data) = address(checkIn).staticcall(
-            abi.encodeWithSignature("lastSeen(address)", user)
-        );
-        if (!ok || data.length < 32) return 0;
-        return abi.decode(data, (uint256));
+        try checkIn.lastSeen(user) returns (uint256 timestamp) {
+            return timestamp;
+        } catch {
+            return 0;
+        }
     }
 
     function _now() private view returns (uint256) {
