@@ -332,6 +332,9 @@ async function loadConfig() {
     if (res.ok) deployed = await res.json();
   } catch {}
 
+  // Expose full deployed.json on state for scheduler and future fields
+  state.deployed = deployed;
+
   // Source 2: localStorage (user-saved via Save button)
   const savedCheckIn = localStorage.getItem("lastsignal.checkIn");
   const savedVault = localStorage.getItem("lastsignal.vault");

@@ -65,8 +65,9 @@ async function main() {
 
   // ── Deploy SchedulerNotifications ──
   console.log("⏰ Deploying SchedulerNotifications.sol...");
+  const RITUAL_SCHEDULER = "0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B";
   const SchedulerNotifications = await ethers.getContractFactory("SchedulerNotifications");
-  const scheduler = await SchedulerNotifications.deploy(checkInAddress);
+  const scheduler = await SchedulerNotifications.deploy(checkInAddress, RITUAL_SCHEDULER);
   await scheduler.waitForDeployment();
   const schedulerAddress = await scheduler.getAddress();
   console.log(`✅ SchedulerNotifications deployed: ${schedulerAddress}\n`);

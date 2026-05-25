@@ -29,9 +29,6 @@ contract SchedulerNotifications {
 
     // ── Constants ──
 
-    /// @notice Ritual Chain's genesis-deployed Scheduler
-    IScheduler public constant SCHEDULER = IScheduler(0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B);
-
     uint256 public constant GHOST_THRESHOLD = 30 days;
     uint256 public constant NUDGE_BEFORE_GHOST = 1 days; // nudge 1 day before ghost triggers
 
@@ -39,6 +36,12 @@ contract SchedulerNotifications {
 
     address public owner;
     ICheckIn public checkIn;
+    IScheduler public scheduler;
+
+    // ── Events ──
+
+    /// @dev Emitted when the scheduler contract address is updated
+    event SchedulerUpdated(address indexed oldScheduler, address indexed newScheduler);
 
     // ── Events ──
 
@@ -63,14 +66,16 @@ contract SchedulerNotifications {
     }
 
     modifier onlyScheduler() {
-        if (msg.sender != address(SCHEDULER)) revert NotScheduler();
+        if (msg.sender != address(scheduler)) revert NotScheduler();
         _;
     }
 
     // ── Constructor ──
 
-    constructor(address _checkIn) {
+    constructor(address _checkIn, address _scheduler) {
+        require(_scheduler != address(0), "Invalid scheduler address");
         checkIn = ICheckIn(_checkIn);
+        scheduler = IScheduler(_scheduler);
         owner = msg.sender;
     }
 
@@ -97,12 +102,12 @@ contract SchedulerNotifications {
         uint256 forNudgeAt
     ) external returns (bytes32 ghostId, bytes32 nudgeId) {
         if (msg.sender != user) revert NotUser();
-        ghostId = SCHEDULER.scheduleTransaction(
+        ghostId = scheduler.scheduleTransaction(
             address(this),
             abi.encodeWithSelector(this.executeGhostCheck.selector, user),
             forGhostCheckAt
         );
-        nudgeId = SCHEDULER.scheduleTransaction(
+        nudgeId = scheduler.scheduleTransaction(
             address(this),
             abi.encodeWithSelector(this.executeStreakNudge.selector, user),
             forNudgeAt
