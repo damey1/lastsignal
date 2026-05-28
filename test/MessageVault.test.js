@@ -5,7 +5,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const SEVEN_DAYS = 7 * 24 * 60 * 60;
 
 describe("MessageVault — Heartbeat-gated vault", function () {
-  let badges, checkIn, vault;
+  let badges, checkIn, scheduler, schedulerNotifications, vault;
   let owner, recipient, other;
 
   beforeEach(async () => {
@@ -17,9 +17,23 @@ describe("MessageVault — Heartbeat-gated vault", function () {
     const CheckIn = await ethers.getContractFactory("CheckIn");
     checkIn = await CheckIn.deploy(await badges.getAddress(), ethers.ZeroAddress);
 
-    const MessageVault = await ethers.getContractFactory("MessageVault");
-    vault = await MessageVault.deploy(await checkIn.getAddress(), await badges.getAddress());
+    const MockScheduler = await ethers.getContractFactory("MockScheduler");
+    scheduler = await MockScheduler.deploy();
 
+    const SchedulerNotifications = await ethers.getContractFactory("SchedulerNotifications");
+    schedulerNotifications = await SchedulerNotifications.deploy(
+      await checkIn.getAddress(),
+      await scheduler.getAddress()
+    );
+
+    const MessageVault = await ethers.getContractFactory("MessageVault");
+    vault = await MessageVault.deploy(
+      await checkIn.getAddress(),
+      await badges.getAddress(),
+      await schedulerNotifications.getAddress()
+    );
+
+    await schedulerNotifications.setVault(await vault.getAddress());
     await badges.setMinter(await checkIn.getAddress(), true);
     await badges.setMinter(await vault.getAddress(), true);
   });
@@ -35,7 +49,9 @@ describe("MessageVault — Heartbeat-gated vault", function () {
       .sealMessage(to.address, content, unlockAfter);
     const receipt = await tx.wait();
 
+    const vaultAddr = (await vault.getAddress()).toLowerCase();
     for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== vaultAddr) continue;
       const parsed = vault.interface.parseLog(log);
       if (parsed && parsed.name === "MessageSealed") {
         return parsed.args.messageId;
@@ -57,6 +73,17 @@ describe("MessageVault — Heartbeat-gated vault", function () {
         .connect(owner)
         .sealMessage(recipient.address, "encrypted://message", SEVEN_DAYS)
     ).to.be.revertedWithCustomError(vault, "HeartbeatNotFound");
+  });
+
+  it("requires a fresh enough heartbeat for the selected unlock delay", async () => {
+    await checkIn.connect(owner).checkIn();
+    await time.increase(SEVEN_DAYS);
+
+    await expect(
+      vault
+        .connect(owner)
+        .sealMessage(recipient.address, "encrypted://message", SEVEN_DAYS)
+    ).to.be.revertedWithCustomError(vault, "HeartbeatTooStale");
   });
 
   it("keeps a message locked while the owner heartbeat is still fresh", async () => {

@@ -19,6 +19,8 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join, resolve, extname } from "path";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 dotenv.config();
 dotenv.config({ path: join(__dirname, ".env") }); // also load service/.env
 
@@ -47,8 +49,6 @@ function getMailer() {
   }
   return _mailer;
 }
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Config ──
 
@@ -79,12 +79,20 @@ const VAULT_EVENTS = [
   "event MessageUnlocked(bytes32 indexed messageId, address indexed owner, address indexed recipient, uint256 inactiveDuration, uint256 unlockedAt)",
 ];
 
+const SCHEDULER_EVENTS = [
+  "event MessageLockWarning(bytes32 indexed messageId, address indexed owner, address indexed recipient, uint256 unlockAt)",
+  "event MessageUnlockable(bytes32 indexed messageId, address indexed owner, address indexed recipient, uint256 inactiveDuration)",
+];
+
 // ── Provider & Contracts ──
 
 const provider = new ethers.WebSocketProvider(WSS_URL);
 console.log(`  WebSocket:  ${WSS_URL}`);
 const checkIn = new ethers.Contract(deployed.checkIn, CHECKIN_EVENTS, provider);
 const vault = new ethers.Contract(deployed.messageVault, VAULT_EVENTS, provider);
+const schedulerNotifications = deployed.schedulerNotifications
+  ? new ethers.Contract(deployed.schedulerNotifications, SCHEDULER_EVENTS, provider)
+  : null;
 
 // ── Subscription Store ──
 
@@ -276,6 +284,18 @@ function formatEvent(eventName, args) {
         msg: `↺ Back from the dead after ${Math.floor(Number(args.silenceDuration) / 86400)} days`,
         target: args.user.toLowerCase(),
       };
+    case "MessageLockWarning":
+      return {
+        type: "message_lock_warning",
+        msg: `Locked message warning — unlockable ${new Date(Number(args.unlockAt) * 1000).toLocaleString()}`,
+        target: args.owner.toLowerCase(),
+      };
+    case "MessageUnlockable":
+      return {
+        type: "message_unlockable",
+        msg: `Message is unlockable from ${args.owner.slice(0, 6)}…${args.owner.slice(-4)}`,
+        target: args.recipient.toLowerCase(),
+      };
     default:
       return null;
   }
@@ -347,6 +367,9 @@ async function run() {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`  CheckIn:      ${deployed.checkIn}`);
   console.log(`  MessageVault: ${deployed.messageVault}`);
+  if (deployed.schedulerNotifications) {
+    console.log(`  Scheduler:    ${deployed.schedulerNotifications}`);
+  }
   console.log(`  Network:      ${deployed.network}`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
@@ -354,6 +377,13 @@ async function run() {
     { name: "CheckIn", contract: checkIn, events: ["StreakBroken", "GhostModeEntered", "BackFromTheDead"] },
     { name: "Vault", contract: vault, events: ["MessageSealed", "MessageUnlocked"] },
   ];
+  if (schedulerNotifications) {
+    contracts.push({
+      name: "SchedulerNotifications",
+      contract: schedulerNotifications,
+      events: ["MessageLockWarning", "MessageUnlockable"],
+    });
+  }
 
   for (const { name, contract, events } of contracts) {
     for (const eventName of events) {

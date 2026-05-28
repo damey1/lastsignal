@@ -24,10 +24,6 @@ const CHECKIN_ABI = [
   "event BackFromTheDead(address indexed user,uint256 checkedInAt,uint256 silenceDuration)"
 ];
 
-const SCHEDULER_ABI = [
-  "function scheduleCheckIns(address user,uint256 forGhostCheckAt,uint256 forNudgeAt) external returns (bytes32,bytes32)",
-];
-
 const VAULT_ABI = [
   "function sealMessage(address recipient,string encryptedContent,uint256 inactivityUnlock) external returns (bytes32)",
   "function getMyMessages() external view returns (bytes32[])",
@@ -54,6 +50,10 @@ const BADGE_ABI = [
 
 const RITUAL_CHAIN_ID = 1979;
 const RITUAL_CHAIN_HEX = "0x7BB";
+const RITUAL_SCHEDULER_ADDRESS = "0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B";
+const RITUAL_SCHEDULER_SYSTEM_ABI = [
+  "function approveScheduler(address schedulerContract) external",
+];
 
 const levelLabels = ["None", "New", "Stable", "Strong", "Legendary"];
 const riskLabels = ["Unknown", "Active", "Watch", "Ghost"];
@@ -301,6 +301,25 @@ async function gasEstimateLabel() {
   if (!fee.gasPrice) return "";
   const gwei = ethers.formatUnits(fee.gasPrice, "gwei");
   return `[${Number(gwei).toFixed(1)} gwei]`;
+}
+
+async function ensureSchedulerApproval(statusNode) {
+  const schedulerNotifications = state.deployed?.schedulerNotifications;
+  if (!schedulerNotifications || !ethers.isAddress(schedulerNotifications)) return;
+  if (!state.signer || !state.account) throw new Error("Connect wallet first");
+
+  const key = `lastsignal.schedulerApproval.${state.account.toLowerCase()}.${schedulerNotifications.toLowerCase()}`;
+  if (localStorage.getItem(key) === "1") return;
+
+  setStatus(statusNode, "Approving scheduler for locked message checks...");
+  const scheduler = new ethers.Contract(
+    RITUAL_SCHEDULER_ADDRESS,
+    RITUAL_SCHEDULER_SYSTEM_ABI,
+    state.signer
+  );
+  const tx = await scheduler.approveScheduler(schedulerNotifications);
+  await tx.wait();
+  localStorage.setItem(key, "1");
 }
 
 function setText(node, text) {
@@ -687,9 +706,6 @@ async function sendCheckIn() {
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.signalStatus, `Heartbeat confirmed — ${link}`);
 
-    // Schedule ghost check + streak nudge via Ritual Scheduler
-    try { await _scheduleAfterCheckIn(receipt.blockNumber); } catch (e) { console.warn("Scheduler skip:", e); }
-
     setBusy(ui.checkInButton, false);
     await refreshAll();
   } catch (error) {
@@ -698,26 +714,6 @@ async function sendCheckIn() {
     try { await refreshSignal(); } catch {}
     setBusy(ui.checkInButton, false);
   }
-}
-
-// ── Ritual Scheduler: schedule ghost check + streak nudge after check-in ──
-
-async function _scheduleAfterCheckIn(checkInBlock) {
-  const schedulerAddr = state.deployed?.schedulerNotifications;
-  if (!schedulerAddr || !state.signer) return;
-
-  const BLOCKS_PER_DAY = 246857n; // ~350ms block time on Ritual
-  const currentBlock = BigInt(checkInBlock);
-
-  const scheduler = new ethers.Contract(schedulerAddr, SCHEDULER_ABI, state.signer);
-  const ghostBlock = currentBlock + BLOCKS_PER_DAY * 30n;
-  const nudgeBlock = currentBlock + BLOCKS_PER_DAY * 29n;
-
-  const gas = await gasEstimateLabel();
-  setStatus(ui.signalStatus, `Scheduling ghost check... ${gas}`.trim());
-  const tx = await scheduler.scheduleCheckIns(state.account, ghostBlock, nudgeBlock);
-  await tx.wait();
-  setStatus(ui.signalStatus, `✅ Ghost check scheduled`);
 }
 
 async function migrateSignal() {
@@ -812,16 +808,19 @@ async function sealMessage() {
 
   try {
     // Step 1 — sign message to derive encryption key (MetaMask popup)
+    await ensureSchedulerApproval(ui.sealStatus);
+
+    // Step 2 — sign message to derive encryption key (MetaMask popup)
     setStatus(ui.sealStatus, "Sign message to encrypt...");
 
-    // Step 2 — encrypt both copies
+    // Step 3 — encrypt both copies
     const ownerEnc = await encryptForOwner(plaintext);
     const recipientEnc = await encryptForRecipient(plaintext, passphrase);
 
-    // Step 3 — package as JSON blob
+    // Step 4 — package as JSON blob
     const payload = JSON.stringify({ v: ENC_VERSION, o: ownerEnc, r: recipientEnc });
 
-    // Step 4 — seal on-chain
+    // Step 5 — seal on-chain
     const gas = await gasEstimateLabel();
     setStatus(ui.sealStatus, `Sealing encrypted message ${gas}`.trim());
     const receipt = await withBadgeCelebration(async () => {
@@ -1175,6 +1174,9 @@ function readableError(error) {
   if (msg.includes("CannotDeclareSelf")) {
     return "You cannot declare yourself as ghost";
   }
+  if (msg.includes("HeartbeatTooStale")) {
+    return "Check in before sealing this lock duration";
+  }
   if (msg.includes("unknown custom error")) {
     return "Transaction reverted — check wallet and try again";
   }
@@ -1182,6 +1184,9 @@ function readableError(error) {
   // Catch insufficient funds and surface a clear message
   if (msg.includes("insufficient funds") || msg.includes("gas required exceeds")) {
     return "⚠️ Insufficient RITUAL balance for gas — fund your wallet and try again";
+  }
+  if (msg.includes("insufficient") || msg.includes("Insufficient")) {
+    return "Scheduler funding is too low — add RITUAL to RitualWallet and try again";
   }
 
   return msg.replace(/^execution reverted: /, "");

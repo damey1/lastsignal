@@ -49,20 +49,6 @@ async function main() {
   const checkInAddress = await checkIn.getAddress();
   console.log(`✅ CheckIn deployed: ${checkInAddress}\n`);
 
-  // ── Deploy MessageVault ──
-  console.log("🔒 Deploying MessageVault.sol...");
-  const MessageVault = await ethers.getContractFactory("MessageVault");
-  const messageVault = await MessageVault.deploy(checkInAddress, badgesAddress);
-  await messageVault.waitForDeployment();
-  const vaultAddress = await messageVault.getAddress();
-  console.log(`✅ MessageVault deployed: ${vaultAddress}\n`);
-
-  // ── Authorize protocol contracts to award badges ──
-  console.log("🔑 Authorizing badge minters...");
-  await (await badges.setMinter(checkInAddress, true)).wait();
-  await (await badges.setMinter(vaultAddress, true)).wait();
-  console.log("✅ Badge minters authorized\n");
-
   // ── Deploy SchedulerNotifications ──
   console.log("⏰ Deploying SchedulerNotifications.sol...");
   const RITUAL_SCHEDULER = "0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B";
@@ -71,6 +57,21 @@ async function main() {
   await scheduler.waitForDeployment();
   const schedulerAddress = await scheduler.getAddress();
   console.log(`✅ SchedulerNotifications deployed: ${schedulerAddress}\n`);
+
+  // ── Deploy MessageVault ──
+  console.log("🔒 Deploying MessageVault.sol...");
+  const MessageVault = await ethers.getContractFactory("MessageVault");
+  const messageVault = await MessageVault.deploy(checkInAddress, badgesAddress, schedulerAddress);
+  await messageVault.waitForDeployment();
+  const vaultAddress = await messageVault.getAddress();
+  console.log(`✅ MessageVault deployed: ${vaultAddress}\n`);
+
+  // ── Authorize protocol contracts ──
+  console.log("🔑 Authorizing protocol contracts...");
+  await (await badges.setMinter(checkInAddress, true)).wait();
+  await (await badges.setMinter(vaultAddress, true)).wait();
+  await (await scheduler.setVault(vaultAddress)).wait();
+  console.log("✅ Protocol contracts authorized\n");
 
   // ── Fund RitualWallet for scheduler fees ──
   console.log("💰 Funding RitualWallet for scheduler fees...");

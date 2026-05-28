@@ -6,10 +6,11 @@ async function main() {
   const badgesAddress = process.env.BADGES_ADDRESS;
   const checkInAddress = process.env.CHECKIN_ADDRESS;
   const vaultAddress = process.env.VAULT_ADDRESS;
+  const schedulerNotificationsAddress = process.env.SCHEDULER_NOTIFICATIONS_ADDRESS;
   const previousCheckIn = process.env.PREVIOUS_CHECKIN_ADDRESS;
 
-  if (!badgesAddress || !checkInAddress || !vaultAddress) {
-    throw new Error("BADGES_ADDRESS, CHECKIN_ADDRESS, and VAULT_ADDRESS are required");
+  if (!badgesAddress || !checkInAddress || !vaultAddress || !schedulerNotificationsAddress) {
+    throw new Error("BADGES_ADDRESS, CHECKIN_ADDRESS, VAULT_ADDRESS, and SCHEDULER_NOTIFICATIONS_ADDRESS are required");
   }
 
   const LastSignalBadges = await ethers.getContractFactory("LastSignalBadges");
@@ -26,10 +27,16 @@ async function main() {
   console.log(`CheckIn minter: ${await badges.minters(checkInAddress)}`);
   console.log(`Vault minter:   ${await badges.minters(vaultAddress)}`);
 
+  const SchedulerNotifications = await ethers.getContractFactory("SchedulerNotifications");
+  const schedulerNotifications = SchedulerNotifications.attach(schedulerNotificationsAddress);
+  await (await schedulerNotifications.setVault(vaultAddress)).wait();
+  console.log(`Scheduler vault: ${vaultAddress}`);
+
   const deployedJson = {
     badges: badgesAddress,
     checkIn: checkInAddress,
     messageVault: vaultAddress,
+    schedulerNotifications: schedulerNotificationsAddress,
     previousCheckIn: previousCheckIn || undefined,
     network: hre.network.name,
   };
