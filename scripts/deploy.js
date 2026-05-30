@@ -94,14 +94,17 @@ async function main() {
   console.log("✅ SchedulerNotifications ready\n");
 
   // ── Write deployed.json ──
-  const deployedJson = {
-    badges: badgesAddress,
-    checkIn: checkInAddress,
-    messageVault: vaultAddress,
-    schedulerNotifications: schedulerAddress,
-    previousCheckIn: previousCheckInAddress !== ethers.ZeroAddress ? previousCheckInAddress : undefined,
-    network: network.name,
-  };
+  // Merge into existing so legacy fields (legacyMessageVault, checkInAdapter, etc.)
+  // survive future deployments — never build from scratch.
+  const deployedJson = { ...existingDeployed };
+  deployedJson.badges = badgesAddress;
+  deployedJson.checkIn = checkInAddress;
+  deployedJson.messageVault = vaultAddress;
+  deployedJson.schedulerNotifications = schedulerAddress;
+  if (previousCheckInAddress !== ethers.ZeroAddress) {
+    deployedJson.previousCheckIn = previousCheckInAddress;
+  }
+  deployedJson.network = network.name;
   fs.writeFileSync(outPath, JSON.stringify(deployedJson, null, 2));
   console.log(`📝 Wrote ${outPath}\n`);
 

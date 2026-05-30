@@ -1,10 +1,9 @@
 {
-  "badges": "0x83B9cCa4A698fEf5a5a9E31A27643eF99178b6b9",
-  "checkIn": "0x8A81adc79A883E46e7D8d93DD23b1998d8E70da5",
-  "messageVault": "0x14609FA9270129bfD37FC85b69bd49BdA6fDfe90",
-  "legacyMessageVault": "0xAD00AC0CfE2eD1F792a80E4EaAF8782D0c620B02",
-  "previousCheckIn": "0x67a2b93a6ab2945BEE1eb8C1C76a5e22Ebc1c71c",
-  "network": "ritual",
-  "checkInAdapter": "0x2357Fb93eBaF0fD5611A937bFE44F725eFa86b84",
-  "legacyVaultCheckInContract": "0x2357Fb93eBaF0fD5611A937bFE44F725eFa86b84"
+  "badges": "0x045Ebe5e1D05B5e5c646713f14Ac344d7aaf1E22",
+  "checkIn": "0xb1f71239476643200b23Ce3B24a3701BEeadF24b",
+  "messageVault": "0x9d549CFFa35439e45Cdf8677232ef1058f42deE4",
+  "schedulerNotifications": "0xc2fefFC77FAC2edd2c3030Bd9D50F8B20D384473",
+  "legacyMessageVault": "0x14609FA9270129bfD37FC85b69bd49BdA6fDfe90",
+  "previousCheckIn": "0x8A81adc79A883E46e7D8d93DD23b1998d8E70da5",
+  "network": "ritual"
 }
