@@ -81,6 +81,7 @@ contract SchedulerNotifications {
         uint256 inactiveDuration
     );
     event ScheduleSkipped(bytes32 indexed messageId, string reason);
+    event ScheduleFailed(bytes32 indexed messageId, string reason);
 
     error NotOwner();
     error NotVault();
@@ -275,7 +276,7 @@ contract SchedulerNotifications {
         uint32 startBlock,
         address payer
     ) private returns (uint256 callId) {
-        return scheduler.schedule(
+        try scheduler.schedule(
             data,
             CALLBACK_GAS_LIMIT,
             startBlock,
@@ -286,7 +287,14 @@ contract SchedulerNotifications {
             0,
             0,
             payer
-        );
+        ) returns (uint256 scheduledCallId) {
+            return scheduledCallId;
+        } catch {
+            // Scheduler may be unfunded or unavailable. The off-chain notification
+            // service scans active messages hourly as a fallback — no message
+            // misses its warning/unlock notification.
+            return 0;
+        }
     }
 
     function _delayToBlock(uint256 delaySeconds) private view returns (uint32) {

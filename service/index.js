@@ -33,20 +33,63 @@ webpush.setVapidDetails(
 
 const WSS_URL = process.env.RITUAL_WSS_URL || "wss://rpc.ritualfoundation.org/ws";
 
-// Email transport — SendGrid (SMTP)
-// Get API key at https://app.sendgrid.com/settings/api_keys
+// Email transport — generic SMTP (configurable) / Ethereal (dev)
 import nodemailer from "nodemailer";
 let _mailer = null;
-function getMailer() {
-  const apiKey = process.env.SENDGRID_API_KEY;
-  if (!_mailer && apiKey) {
+let _etherealUrl = null;
+
+async function getMailer() {
+  if (_mailer) return _mailer;
+
+  const host = process.env.SMTP_HOST;
+
+  if (host) {
+    // Generic SMTP — works with SMTP2GO, Mailgun, Mailjet, SendGrid, etc.
+    _mailer = nodemailer.createTransport({
+      host,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+    console.log(`  Email:    SMTP (${host})`);
+    return _mailer;
+  }
+
+  // Backward compat: SendGrid
+  const sgKey = process.env.SENDGRID_API_KEY;
+  if (sgKey && sgKey !== "__REPLACE_WITH_YOUR_SENDGRID_API_KEY__") {
     _mailer = nodemailer.createTransport({
       host: "smtp.sendgrid.net",
       port: 587,
       secure: false,
-      auth: { user: "apikey", pass: apiKey },
+      auth: { user: "apikey", pass: sgKey },
     });
+    console.log(`  Email:    SendGrid`);
+    return _mailer;
   }
+
+  // Dev mode: Ethereal Email (fake SMTP, no real sending)
+  try {
+    const testAccount = await nodemailer.createTestAccount();
+    _mailer = nodemailer.createTransport({
+      host: "smtp.ethereal.email",
+      port: 587,
+      secure: false,
+      auth: { user: testAccount.user, pass: testAccount.pass },
+    });
+    _etherealUrl = "https://ethereal.email";
+    console.log(`  Email:    Ethereal (dev mode)`);
+    console.log(`  Web UI:   ${_etherealUrl}`);
+    console.log(`  Login:    ${testAccount.user}`);
+    console.log(`  Pass:     ${testAccount.pass}`);
+  } catch (err) {
+    console.warn(`  Email:    Ethereal setup failed — logging to console`);
+    _mailer = nodemailer.createTransport({ jsonTransport: true });
+  }
+
   return _mailer;
 }
 
@@ -65,6 +108,13 @@ function loadDeployed() {
 }
 
 const deployed = loadDeployed();
+
+// ── Active message tracking (off-chain fallback for scheduler) ──
+const activeMessages = new Map(); // messageId → { owner, recipient, inactivityUnlock, warned }
+
+const CHECKIN_READ_ABI = [
+  "function lastSeen(address user) view returns (uint256)",
+];
 
 // ── Minimal ABIs (events only) ──
 
@@ -90,6 +140,7 @@ const provider = new ethers.WebSocketProvider(WSS_URL);
 console.log(`  WebSocket:  ${WSS_URL}`);
 const checkIn = new ethers.Contract(deployed.checkIn, CHECKIN_EVENTS, provider);
 const vault = new ethers.Contract(deployed.messageVault, VAULT_EVENTS, provider);
+const checkInRead = new ethers.Contract(deployed.checkIn, CHECKIN_READ_ABI, provider);
 const schedulerNotifications = deployed.schedulerNotifications
   ? new ethers.Contract(deployed.schedulerNotifications, SCHEDULER_EVENTS, provider)
   : null;
@@ -335,7 +386,7 @@ async function deliver(notif, subs, txHash) {
   }
 
   // Email delivery
-  const mailer = getMailer();
+  const mailer = await getMailer();
   if (!mailer) return;
   const emails = loadEmails();
   const emailList = emails[addr];
@@ -399,6 +450,21 @@ async function run() {
 
         const subs = loadSubs();
         await deliver(notif, subs, txHash);
+
+        // Track active messages for off-chain fallback scan
+        if (eventName === "MessageSealed") {
+          activeMessages.set(event.args.messageId, {
+            owner: event.args.owner,
+            recipient: event.args.recipient,
+            inactivityUnlock: Number(event.args.unlockAfter),
+            warned: false,
+          });
+          console.log(`  Tracked: ${activeMessages.size} active messages`);
+        }
+        if (eventName === "MessageUnlocked") {
+          activeMessages.delete(event.args.messageId);
+          console.log(`  Removed: ${activeMessages.size} active messages`);
+        }
       });
       console.log(`  Listening: ${name}.${eventName}`);
     }
@@ -436,5 +502,59 @@ async function cleanupStaleSubs() {
 }
 
 setInterval(cleanupStaleSubs, 3600000); // every hour
+
+// ── Periodic off-chain message scan (fallback when scheduler is unfunded/unavailable) ──
+
+async function scanActiveMessages() {
+  if (activeMessages.size === 0) return;
+
+  const subs = loadSubs();
+  const now = Math.floor(Date.now() / 1000);
+  let warned = 0, unlocked = 0;
+
+  for (const [messageId, msg] of activeMessages) {
+    try {
+      const lastSeen = Number(await checkInRead.lastSeen(msg.owner));
+      if (lastSeen === 0) continue; // user not found
+
+      const silence = now - lastSeen;
+
+      // Warning at 80% of unlock threshold
+      const warningThreshold = msg.inactivityUnlock * 0.8;
+      if (!msg.warned && silence >= warningThreshold && silence < msg.inactivityUnlock) {
+        msg.warned = true;
+        const unlockAt = lastSeen + msg.inactivityUnlock;
+        const notif = {
+          type: "message_lock_warning",
+          msg: `Locked message warning — unlockable ${new Date(unlockAt * 1000).toLocaleString()}`,
+          target: msg.owner.toLowerCase(),
+        };
+        await deliver(notif, subs, "");
+        warned++;
+      }
+
+      // Unlock threshold reached
+      if (silence >= msg.inactivityUnlock) {
+        const notif = {
+          type: "message_unlockable",
+          msg: `Message is unlockable from ${msg.owner.slice(0, 6)}…${msg.owner.slice(-4)}`,
+          target: msg.recipient.toLowerCase(),
+        };
+        await deliver(notif, subs, "");
+        activeMessages.delete(messageId);
+        unlocked++;
+      }
+    } catch (err) {
+      console.warn(`  ⏰ Scan error: ${messageId.slice(0, 10)}… ${err.message}`);
+    }
+  }
+
+  if (warned || unlocked) {
+    console.log(`  ⏰ Scan: ${warned} warnings, ${unlocked} unlock notifications`);
+  }
+}
+
+// Run every 2 hours as a fallback for missed scheduler events
+setInterval(scanActiveMessages, 2 * 3600_000);
 
 run().catch(console.error);
