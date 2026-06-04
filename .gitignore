@@ -26,3 +26,4 @@ Thumbs.db
 
 # Agents (empty dir — external tool config)
 .agents/
+.reasonix/
