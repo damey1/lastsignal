@@ -87,9 +87,9 @@ describe("SchedulerNotifications", function () {
     const unlockCall = await mockScheduler.scheduled(item.unlockCallId);
 
     expect(warningCall.caller).to.equal(await schedulerNotifications.getAddress());
-    expect(warningCall.payer).to.equal(owner.address);
+    expect(warningCall.payer).to.equal(await schedulerNotifications.getAddress());
     expect(unlockCall.caller).to.equal(await schedulerNotifications.getAddress());
-    expect(unlockCall.payer).to.equal(owner.address);
+    expect(unlockCall.payer).to.equal(await schedulerNotifications.getAddress());
     expect(warningCall.startBlock).to.be.lessThan(unlockCall.startBlock);
   });
 

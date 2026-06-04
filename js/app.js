@@ -824,7 +824,7 @@ async function sealMessage() {
     const gas = await gasEstimateLabel();
     setStatus(ui.sealStatus, `Sealing encrypted message ${gas}`.trim());
     const receipt = await withBadgeCelebration(async () => {
-      const tx = await state.vault.sealMessage(recipient, payload, daysToSeconds(ui.unlockDays.value));
+      const tx = await state.vault.sealMessage(recipient, payload, daysToSeconds(ui.unlockDays.value), { gasLimit: 1200000 });
       return tx.wait();
     }, ui.sealStatus);
     const messageId = findMessageId(receipt);

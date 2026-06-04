@@ -242,7 +242,7 @@ contract SchedulerNotifications {
                 generation
             ),
             warningBlock,
-            item.owner
+            address(this)
         );
 
         unlockCallId = _schedule(
@@ -253,7 +253,7 @@ contract SchedulerNotifications {
                 generation
             ),
             unlockBlock,
-            item.owner
+            address(this)
         );
 
         item.warningCallId = warningCallId;
@@ -323,5 +323,14 @@ contract SchedulerNotifications {
     function _tryCancel(uint256 callId) private {
         if (callId == 0) return;
         try scheduler.cancel(callId) {} catch {}
+    }
+
+    receive() external payable {}
+
+    /// @notice Deposit ETH into RitualWallet so this contract can pay scheduler fees.
+    function fundRitualWallet(uint256 lockDuration) external onlyOwner {
+        address w = 0x532F0dF0896F353d8C3DD8cc134e8129DA2a3948;
+        (bool s, ) = w.call{value: address(this).balance}(abi.encodeWithSignature("deposit(uint256)", lockDuration));
+        require(s, "RitualWallet deposit failed");
     }
 }
