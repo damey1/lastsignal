@@ -134,16 +134,97 @@ const SCHEDULER_EVENTS = [
   "event MessageUnlockable(bytes32 indexed messageId, address indexed owner, address indexed recipient, uint256 inactiveDuration)",
 ];
 
-// ── Provider & Contracts ──
+// ── Provider & Contracts (reconnectable) ──
 
-const provider = new ethers.WebSocketProvider(WSS_URL);
-console.log(`  WebSocket:  ${WSS_URL}`);
-const checkIn = new ethers.Contract(deployed.checkIn, CHECKIN_EVENTS, provider);
-const vault = new ethers.Contract(deployed.messageVault, VAULT_EVENTS, provider);
-const checkInRead = new ethers.Contract(deployed.checkIn, CHECKIN_READ_ABI, provider);
-const schedulerNotifications = deployed.schedulerNotifications
-  ? new ethers.Contract(deployed.schedulerNotifications, SCHEDULER_EVENTS, provider)
-  : null;
+let provider = null;
+let checkIn = null;
+let vault = null;
+let checkInRead = null;
+let schedulerNotifications = null;
+let _reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY = 30_000; // 30s cap
+
+function onReconnect() {
+  const delay = Math.min(1000 * Math.pow(2, _reconnectAttempts), MAX_RECONNECT_DELAY);
+  _reconnectAttempts++;
+  console.log(`  ⚡ WebSocket reconnecting in ${delay}ms (attempt ${_reconnectAttempts})...`);
+  setTimeout(createConnection, delay);
+}
+
+async function createConnection() {
+  // Close old provider cleanly if it exists
+  if (provider) {
+    try { provider.websocket.close(); } catch {}
+  }
+
+  provider = new ethers.WebSocketProvider(WSS_URL);
+
+  provider.websocket.on("open", () => {
+    _reconnectAttempts = 0;
+    console.log(`  WebSocket:  ${WSS_URL} ✅`);
+  });
+  provider.websocket.on("close", (code) => {
+    console.warn(`  WebSocket:  closed (code ${code}) — reconnecting...`);
+    onReconnect();
+  });
+  provider.websocket.on("error", (err) => {
+    console.error(`  WebSocket:  error — ${err.message?.slice(0, 60)}`);
+  });
+
+  checkIn = new ethers.Contract(deployed.checkIn, CHECKIN_EVENTS, provider);
+  vault = new ethers.Contract(deployed.messageVault, VAULT_EVENTS, provider);
+  checkInRead = new ethers.Contract(deployed.checkIn, CHECKIN_READ_ABI, provider);
+  schedulerNotifications = deployed.schedulerNotifications
+    ? new ethers.Contract(deployed.schedulerNotifications, SCHEDULER_EVENTS, provider)
+    : null;
+
+  // Attach event listeners
+  const contracts = [
+    { name: "CheckIn", contract: checkIn, events: ["StreakBroken", "GhostModeEntered", "BackFromTheDead"] },
+    { name: "Vault", contract: vault, events: ["MessageSealed", "MessageUnlocked"] },
+  ];
+  if (schedulerNotifications) {
+    contracts.push({
+      name: "SchedulerNotifications",
+      contract: schedulerNotifications,
+      events: ["MessageLockWarning", "MessageUnlockable"],
+    });
+  }
+
+  for (const { name, contract, events } of contracts) {
+    for (const eventName of events) {
+      contract.off(eventName); // clear any stale listeners
+      contract.on(eventName, async (...args) => {
+        const event = args[args.length - 1];
+        const txHash = event?.transactionHash || event?.log?.transactionHash;
+        const notif = formatEvent(eventName, event.args);
+        if (!notif) return;
+
+        console.log(`\n[${eventName}] ${notif.msg}`);
+        console.log(`  Target: ${notif.target}`);
+        console.log(`  Tx:     ${txHash}`);
+
+        const subs = loadSubs();
+        await deliver(notif, subs, txHash);
+
+        if (eventName === "MessageSealed") {
+          activeMessages.set(event.args.messageId, {
+            owner: event.args.owner,
+            recipient: event.args.recipient,
+            inactivityUnlock: Number(event.args.unlockAfter),
+            warned: false,
+          });
+          console.log(`  Tracked: ${activeMessages.size} active messages`);
+        }
+        if (eventName === "MessageUnlocked") {
+          activeMessages.delete(event.args.messageId);
+          console.log(`  Removed: ${activeMessages.size} active messages`);
+        }
+      });
+      console.log(`  Listening: ${name}.${eventName}`);
+    }
+  }
+}
 
 // ── Subscription Store ──
 
@@ -424,51 +505,7 @@ async function run() {
   console.log(`  Network:      ${deployed.network}`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-  const contracts = [
-    { name: "CheckIn", contract: checkIn, events: ["StreakBroken", "GhostModeEntered", "BackFromTheDead"] },
-    { name: "Vault", contract: vault, events: ["MessageSealed", "MessageUnlocked"] },
-  ];
-  if (schedulerNotifications) {
-    contracts.push({
-      name: "SchedulerNotifications",
-      contract: schedulerNotifications,
-      events: ["MessageLockWarning", "MessageUnlockable"],
-    });
-  }
-
-  for (const { name, contract, events } of contracts) {
-    for (const eventName of events) {
-      contract.on(eventName, async (...args) => {
-        const event = args[args.length - 1]; // last arg is the EventLog
-        const txHash = event?.transactionHash || event?.log?.transactionHash;
-        const notif = formatEvent(eventName, event.args);
-        if (!notif) return;
-
-        console.log(`\n[${eventName}] ${notif.msg}`);
-        console.log(`  Target: ${notif.target}`);
-        console.log(`  Tx:     ${txHash}`);
-
-        const subs = loadSubs();
-        await deliver(notif, subs, txHash);
-
-        // Track active messages for off-chain fallback scan
-        if (eventName === "MessageSealed") {
-          activeMessages.set(event.args.messageId, {
-            owner: event.args.owner,
-            recipient: event.args.recipient,
-            inactivityUnlock: Number(event.args.unlockAfter),
-            warned: false,
-          });
-          console.log(`  Tracked: ${activeMessages.size} active messages`);
-        }
-        if (eventName === "MessageUnlocked") {
-          activeMessages.delete(event.args.messageId);
-          console.log(`  Removed: ${activeMessages.size} active messages`);
-        }
-      });
-      console.log(`  Listening: ${name}.${eventName}`);
-    }
-  }
+  await createConnection();
 
   console.log("\n✅ Indexer running. Waiting for events...\n");
 }
