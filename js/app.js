@@ -50,10 +50,6 @@ const BADGE_ABI = [
 
 const RITUAL_CHAIN_ID = 1979;
 const RITUAL_CHAIN_HEX = "0x7BB";
-const RITUAL_SCHEDULER_ADDRESS = "0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B";
-const RITUAL_SCHEDULER_SYSTEM_ABI = [
-  "function approveScheduler(address schedulerContract) external",
-];
 
 const levelLabels = ["None", "New", "Stable", "Strong", "Legendary"];
 const riskLabels = ["Unknown", "Active", "Watch", "Ghost"];
@@ -301,25 +297,6 @@ async function gasEstimateLabel() {
   if (!fee.gasPrice) return "";
   const gwei = ethers.formatUnits(fee.gasPrice, "gwei");
   return `[${Number(gwei).toFixed(1)} gwei]`;
-}
-
-async function ensureSchedulerApproval(statusNode) {
-  const schedulerNotifications = state.deployed?.schedulerNotifications;
-  if (!schedulerNotifications || !ethers.isAddress(schedulerNotifications)) return;
-  if (!state.signer || !state.account) throw new Error("Connect wallet first");
-
-  const key = `lastsignal.schedulerApproval.${state.account.toLowerCase()}.${schedulerNotifications.toLowerCase()}`;
-  if (localStorage.getItem(key) === "1") return;
-
-  setStatus(statusNode, "Approving scheduler for locked message checks...");
-  const scheduler = new ethers.Contract(
-    RITUAL_SCHEDULER_ADDRESS,
-    RITUAL_SCHEDULER_SYSTEM_ABI,
-    state.signer
-  );
-  const tx = await scheduler.approveScheduler(schedulerNotifications);
-  await tx.wait();
-  localStorage.setItem(key, "1");
 }
 
 function setText(node, text) {
@@ -808,19 +785,16 @@ async function sealMessage() {
 
   try {
     // Step 1 — sign message to derive encryption key (MetaMask popup)
-    await ensureSchedulerApproval(ui.sealStatus);
-
-    // Step 2 — sign message to derive encryption key (MetaMask popup)
     setStatus(ui.sealStatus, "Sign message to encrypt...");
 
-    // Step 3 — encrypt both copies
+    // Step 2 — encrypt both copies
     const ownerEnc = await encryptForOwner(plaintext);
     const recipientEnc = await encryptForRecipient(plaintext, passphrase);
 
-    // Step 4 — package as JSON blob
+    // Step 3 — package as JSON blob
     const payload = JSON.stringify({ v: ENC_VERSION, o: ownerEnc, r: recipientEnc });
 
-    // Step 5 — seal on-chain
+    // Step 4 — seal on-chain
     const gas = await gasEstimateLabel();
     setStatus(ui.sealStatus, `Sealing encrypted message ${gas}`.trim());
     const receipt = await withBadgeCelebration(async () => {

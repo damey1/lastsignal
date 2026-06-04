@@ -37,6 +37,10 @@ describe("SchedulerNotifications", function () {
 
     await schedulerNotifications.setVault(await vault.getAddress());
     await badges.setMinter(await vault.getAddress(), true);
+    await owner.sendTransaction({
+      to: await schedulerNotifications.getAddress(),
+      value: ethers.parseEther("10"),
+    });
   });
 
   async function sealMessage(unlockAfter = SEVEN_DAYS) {
@@ -91,6 +95,50 @@ describe("SchedulerNotifications", function () {
     expect(unlockCall.caller).to.equal(await schedulerNotifications.getAddress());
     expect(unlockCall.payer).to.equal(await schedulerNotifications.getAddress());
     expect(warningCall.startBlock).to.be.lessThan(unlockCall.startBlock);
+  });
+
+  it("keeps the message sealed and emits scheduler revert data when scheduling fails", async () => {
+    const revertData = "0x32b54f0c";
+    await mockScheduler.setScheduleRevertData(revertData);
+    await checkIn.connect(owner).checkIn();
+
+    const tx = await vault
+      .connect(owner)
+      .sealMessage(recipient.address, "encrypted://message", SEVEN_DAYS);
+    const receipt = await tx.wait();
+
+    const vaultAddr = (await vault.getAddress()).toLowerCase();
+    const schedulerAddr = (await schedulerNotifications.getAddress()).toLowerCase();
+    let messageId;
+    const failures = [];
+
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() === vaultAddr) {
+        const parsed = vault.interface.parseLog(log);
+        if (parsed?.name === "MessageSealed") messageId = parsed.args.messageId;
+      }
+      if (log.address.toLowerCase() === schedulerAddr) {
+        const parsed = schedulerNotifications.interface.parseLog(log);
+        if (parsed?.name === "ScheduleFailed") failures.push(parsed);
+      }
+    }
+
+    expect(messageId).to.not.equal(undefined);
+    expect(failures).to.have.lengthOf(2);
+    for (const failure of failures) {
+      expect(failure.args.messageId).to.equal(messageId);
+      expect(failure.args.reason).to.equal("scheduler reverted");
+      expect(failure.args.revertData).to.equal(revertData);
+    }
+
+    const item = await scheduleFor(messageId);
+    expect(item.warningCallId).to.equal(0);
+    expect(item.unlockCallId).to.equal(0);
+    expect(item.active).to.equal(true);
+
+    const info = await vault.getMessageInfo(messageId);
+    expect(info[0]).to.equal(owner.address);
+    expect(info[1]).to.equal(recipient.address);
   });
 
   it("rejects direct scheduler arming from non-vault callers", async () => {

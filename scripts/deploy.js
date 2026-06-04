@@ -73,25 +73,21 @@ async function main() {
   await (await scheduler.setVault(vaultAddress)).wait();
   console.log("✅ Protocol contracts authorized\n");
 
-  // ── Fund RitualWallet for scheduler fees ──
-  // The scheduler contract is the payer, so we send ETH to the contract
-  // and have it call deposit() on the RitualWallet.
-  console.log("💰 Funding RitualWallet for scheduler fees...");
-  const depositAmount = ethers.parseEther("0.01");
-  const lockDuration = 1_000_000; // blocks (~4 days at 350ms/block)
+  // ── Fund SchedulerNotifications for scheduler escrow ──
+  // SchedulerNotifications pays Scheduler.schedule{value: escrow} from this balance.
+  console.log("💰 Funding SchedulerNotifications for scheduler escrow...");
+  const depositAmount = process.env.SCHEDULER_ESCROW_FUND
+    ? ethers.parseEther(process.env.SCHEDULER_ESCROW_FUND)
+    : ethers.parseEther("0.01");
   try {
     const fundTx = await deployer.sendTransaction({
       to: schedulerAddress,
       value: depositAmount,
     });
     await fundTx.wait();
-    console.log(`  Sent ${ethers.formatEther(depositAmount)} RITUAL to scheduler contract`);
-
-    const depositTx = await scheduler.fundRitualWallet(lockDuration);
-    await depositTx.wait();
-    console.log(`✅ RitualWallet funded: ${ethers.formatEther(depositAmount)} RITUAL (locked ${lockDuration} blocks)\n`);
+    console.log(`✅ SchedulerNotifications funded: ${ethers.formatEther(depositAmount)} RITUAL\n`);
   } catch (err) {
-    console.warn(`⚠️ RitualWallet funding skipped: ${err.message}\n`);
+    console.warn(`⚠️ Scheduler escrow funding skipped: ${err.message}\n`);
   }
 
   // ── Authorize scheduler contract with CheckIn ──

@@ -19,8 +19,13 @@ contract MockScheduler {
 
     mapping(uint256 => ScheduledCall) private scheduledCalls;
     uint256 public nextCallId;
+    bytes public scheduleRevertData;
 
     event Canceled(uint256 indexed callId);
+
+    function setScheduleRevertData(bytes calldata data) external {
+        scheduleRevertData = data;
+    }
 
     function schedule(
         bytes calldata data,
@@ -33,7 +38,14 @@ contract MockScheduler {
         uint256 maxPriorityFeePerGas,
         uint256 value,
         address payer
-    ) external returns (uint256 callId) {
+    ) external payable returns (uint256 callId) {
+        if (scheduleRevertData.length > 0) {
+            bytes memory reason = scheduleRevertData;
+            assembly {
+                revert(add(reason, 32), mload(reason))
+            }
+        }
+
         callId = ++nextCallId;
         scheduledCalls[callId] = ScheduledCall({
             caller: msg.sender,

@@ -20,7 +20,7 @@ interface IScheduler {
         uint256 maxPriorityFeePerGas,
         uint256 value,
         address payer
-    ) external returns (uint256 callId);
+    ) external payable returns (uint256 callId);
 
     function cancel(uint256 callId) external;
 }
@@ -81,7 +81,7 @@ contract SchedulerNotifications {
         uint256 inactiveDuration
     );
     event ScheduleSkipped(bytes32 indexed messageId, string reason);
-    event ScheduleFailed(bytes32 indexed messageId, string reason);
+    event ScheduleFailed(bytes32 indexed messageId, string reason, bytes revertData);
 
     error NotOwner();
     error NotVault();
@@ -235,6 +235,7 @@ contract SchedulerNotifications {
         uint32 unlockBlock = _delayToBlock(item.inactivityUnlock);
 
         warningCallId = _schedule(
+            messageId,
             abi.encodeWithSelector(
                 this.executeWarningCheck.selector,
                 uint256(0),
@@ -246,6 +247,7 @@ contract SchedulerNotifications {
         );
 
         unlockCallId = _schedule(
+            messageId,
             abi.encodeWithSelector(
                 this.executeUnlockCheck.selector,
                 uint256(0),
@@ -272,27 +274,52 @@ contract SchedulerNotifications {
     }
 
     function _schedule(
+        bytes32 messageId,
         bytes memory data,
         uint32 startBlock,
         address payer
     ) private returns (uint256 callId) {
-        try scheduler.schedule(
+        uint256 maxFeePerGas = tx.gasprice;
+        uint256 escrow = uint256(CALLBACK_GAS_LIMIT) * maxFeePerGas;
+
+        if (address(this).balance < escrow) {
+            emit ScheduleFailed(
+                messageId,
+                "insufficient scheduler escrow",
+                abi.encode(escrow, address(this).balance)
+            );
+            return 0;
+        }
+
+        try scheduler.schedule{value: escrow}(
             data,
             CALLBACK_GAS_LIMIT,
             startBlock,
             1,
             1,
             CALLBACK_TTL,
-            tx.gasprice,
+            maxFeePerGas,
             0,
             0,
             payer
         ) returns (uint256 scheduledCallId) {
             return scheduledCallId;
-        } catch {
-            // Scheduler may be unfunded or unavailable. The off-chain notification
-            // service scans active messages hourly as a fallback — no message
-            // misses its warning/unlock notification.
+        } catch Error(string memory reason) {
+            emit ScheduleFailed(
+                messageId,
+                reason,
+                abi.encodeWithSignature("Error(string)", reason)
+            );
+            return 0;
+        } catch Panic(uint256 code) {
+            emit ScheduleFailed(
+                messageId,
+                "scheduler panic",
+                abi.encodeWithSignature("Panic(uint256)", code)
+            );
+            return 0;
+        } catch (bytes memory revertData) {
+            emit ScheduleFailed(messageId, "scheduler reverted", revertData);
             return 0;
         }
     }
