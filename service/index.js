@@ -220,6 +220,10 @@ async function createConnection() {
           activeMessages.delete(event.args.messageId);
           console.log(`  Removed: ${activeMessages.size} active messages`);
         }
+
+        // Track the block for backfill checkpoint
+        const blockNumber = event?.blockNumber || event?.log?.blockNumber;
+        if (blockNumber) saveLastBlock(Number(blockNumber));
       });
       console.log(`  Listening: ${name}.${eventName}`);
     }
@@ -242,6 +246,110 @@ function loadEmails() {
 }
 function saveEmails(emails) {
   writeFileSync(EMAIL_PATH, JSON.stringify(emails, null, 2));
+}
+
+// ── Event Backfill (catch up on missed events after restart) ──
+
+const LAST_BLOCK_PATH = join(__dirname, "last-block.json");
+const BACKFILL_CHUNK = 90_000; // blocks per eth_getLogs chunk
+
+function loadLastBlock() {
+  try { return Number(JSON.parse(readFileSync(LAST_BLOCK_PATH, "utf8")).lastBlock); } catch { return 0; }
+}
+function saveLastBlock(blockNumber) {
+  writeFileSync(LAST_BLOCK_PATH, JSON.stringify({ lastBlock: blockNumber }));
+}
+
+async function processEventLog(eventName, args, txHash) {
+  const notif = formatEvent(eventName, args);
+  if (!notif) return;
+
+  console.log(`  [backfill] ${eventName} — ${notif.msg.slice(0, 60)}`);
+
+  const subs = loadSubs();
+  await deliver(notif, subs, txHash || "");
+
+  if (eventName === "MessageSealed") {
+    activeMessages.set(args.messageId, {
+      owner: args.owner,
+      recipient: args.recipient,
+      inactivityUnlock: Number(args.unlockAfter),
+      warned: false,
+    });
+  }
+  if (eventName === "MessageUnlocked") {
+    activeMessages.delete(args.messageId);
+  }
+}
+
+async function queryChunked(contract, filter, fromBlock, toBlock) {
+  const from = Number(fromBlock);
+  const to = Number(toBlock);
+  const results = [];
+  for (let start = from; start <= to; start += BACKFILL_CHUNK) {
+    const end = Math.min(start + BACKFILL_CHUNK - 1, to);
+    try {
+      const chunk = await contract.queryFilter(filter, start, end);
+      results.push(...chunk);
+    } catch {
+      // RPC may reject the range; skip silently
+    }
+  }
+  return results;
+}
+
+async function backfillEvents() {
+  const latest = await provider.getBlockNumber().catch(() => 0);
+  if (latest < 1) return;
+
+  const fromBlock = loadLastBlock();
+  if (fromBlock >= latest) return; // already caught up
+
+  const startBlock = Math.max(1, fromBlock + 1);
+  const count = latest - startBlock;
+  console.log(`  Backfill: scanning ${count} blocks (${startBlock} → ${latest})...`);
+
+  // Build contracts list same as createConnection
+  const backfillContracts = [
+    { name: "CheckIn", address: deployed.checkIn, iface: new ethers.Interface(CHECKIN_EVENTS),
+      events: ["StreakBroken", "GhostModeEntered", "BackFromTheDead"] },
+    { name: "Vault", address: deployed.messageVault, iface: new ethers.Interface(VAULT_EVENTS),
+      events: ["MessageSealed", "MessageUnlocked"] },
+  ];
+  if (deployed.schedulerNotifications) {
+    backfillContracts.push({
+      name: "Scheduler", address: deployed.schedulerNotifications,
+      iface: new ethers.Interface(SCHEDULER_EVENTS),
+      events: ["MessageLockWarning", "MessageUnlockable"],
+    });
+  }
+
+  let total = 0;
+  const rpcProvider = new ethers.JsonRpcProvider(RPC_URL);
+
+  for (const { name, address, iface, events } of backfillContracts) {
+    const contract = new ethers.Contract(address, CHECKIN_EVENTS.concat(VAULT_EVENTS).concat(SCHEDULER_EVENTS), rpcProvider);
+    for (const eventName of events) {
+      try {
+        const logs = await queryChunked(contract, contract.filters[eventName](), startBlock, latest);
+        for (const log of logs) {
+          const parsed = iface.parseLog(log);
+          if (parsed) {
+            await processEventLog(eventName, parsed.args, log.transactionHash);
+            total++;
+          }
+        }
+      } catch {
+        // Skip events that fail to query
+      }
+    }
+  }
+
+  saveLastBlock(latest);
+  if (total > 0) {
+    console.log(`  Backfill: processed ${total} missed events`);
+  }
+  rpcProvider.destroy();
 }
 
 // ── HTTP server (frontend + API) ──
@@ -506,6 +614,9 @@ async function run() {
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
   await createConnection();
+
+  // Catch up on events that happened while the service was down
+  await backfillEvents();
 
   console.log("\n✅ Indexer running. Waiting for events...\n");
 }
