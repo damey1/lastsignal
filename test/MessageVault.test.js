@@ -5,17 +5,37 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const SEVEN_DAYS = 7 * 24 * 60 * 60;
 
 describe("MessageVault — Heartbeat-gated vault", function () {
-  let checkIn, vault;
+  let badges, checkIn, scheduler, schedulerNotifications, vault;
   let owner, recipient, other;
 
   beforeEach(async () => {
     [owner, recipient, other] = await ethers.getSigners();
 
+    const LastSignalBadges = await ethers.getContractFactory("LastSignalBadges");
+    badges = await LastSignalBadges.deploy();
+
     const CheckIn = await ethers.getContractFactory("CheckIn");
-    checkIn = await CheckIn.deploy();
+    checkIn = await CheckIn.deploy(await badges.getAddress(), ethers.ZeroAddress);
+
+    const MockScheduler = await ethers.getContractFactory("MockScheduler");
+    scheduler = await MockScheduler.deploy();
+
+    const SchedulerNotifications = await ethers.getContractFactory("SchedulerNotifications");
+    schedulerNotifications = await SchedulerNotifications.deploy(
+      await checkIn.getAddress(),
+      await scheduler.getAddress()
+    );
 
     const MessageVault = await ethers.getContractFactory("MessageVault");
-    vault = await MessageVault.deploy(await checkIn.getAddress());
+    vault = await MessageVault.deploy(
+      await checkIn.getAddress(),
+      await badges.getAddress(),
+      await schedulerNotifications.getAddress()
+    );
+
+    await schedulerNotifications.setVault(await vault.getAddress());
+    await badges.setMinter(await checkIn.getAddress(), true);
+    await badges.setMinter(await vault.getAddress(), true);
   });
 
   async function sealMessage(
@@ -29,7 +49,9 @@ describe("MessageVault — Heartbeat-gated vault", function () {
       .sealMessage(to.address, content, unlockAfter);
     const receipt = await tx.wait();
 
+    const vaultAddr = (await vault.getAddress()).toLowerCase();
     for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== vaultAddr) continue;
       const parsed = vault.interface.parseLog(log);
       if (parsed && parsed.name === "MessageSealed") {
         return parsed.args.messageId;
@@ -51,6 +73,17 @@ describe("MessageVault — Heartbeat-gated vault", function () {
         .connect(owner)
         .sealMessage(recipient.address, "encrypted://message", SEVEN_DAYS)
     ).to.be.revertedWithCustomError(vault, "HeartbeatNotFound");
+  });
+
+  it("requires a fresh enough heartbeat for the selected unlock delay", async () => {
+    await checkIn.connect(owner).checkIn();
+    await time.increase(SEVEN_DAYS);
+
+    await expect(
+      vault
+        .connect(owner)
+        .sealMessage(recipient.address, "encrypted://message", SEVEN_DAYS)
+    ).to.be.revertedWithCustomError(vault, "HeartbeatTooStale");
   });
 
   it("keeps a message locked while the owner heartbeat is still fresh", async () => {
@@ -86,9 +119,16 @@ describe("MessageVault — Heartbeat-gated vault", function () {
 
     const tx = await vault.connect(recipient).claimMessage(messageId);
 
-    await expect(tx)
-      .to.emit(vault, "MessageUnlocked")
-      .withArgs(messageId, recipient.address, await blockTimestamp(tx));
+    await expect(tx).to.emit(vault, "MessageUnlocked");
+
+    // Verify event args individually (silence is ~SEVEN_DAYS, exact depends on block timing)
+    const events = (await tx.wait()).logs
+      .map(l => vault.interface.parseLog(l))
+      .filter(p => p?.name === "MessageUnlocked")[0];
+    expect(events.args.owner).to.equal(owner.address);
+    expect(events.args.recipient).to.equal(recipient.address);
+    const silenceSecs = Number(events.args.inactiveDuration);
+    expect(silenceSecs).to.be.closeTo(SEVEN_DAYS + 1, 10);
 
     expect(await vault.connect(recipient).readMessage(messageId))
       .to.equal("encrypted://message");
@@ -179,5 +219,37 @@ describe("MessageVault — Heartbeat-gated vault", function () {
       .to.be.revertedWithCustomError(vault, "AlreadyUnlocked");
     await expect(vault.connect(owner).updateInactivityUnlock(unlockedId, SEVEN_DAYS))
       .to.be.revertedWithCustomError(vault, "AlreadyUnlocked");
+  });
+
+  it("awards vault badges for sealing and recipient claims", async () => {
+    await checkIn.connect(owner).checkIn();
+    const messageId = await sealMessage();
+
+    expect(await badges.hasBadge(owner.address, 7)).to.equal(true);
+    expect(await badges.balanceOf(owner.address)).to.equal(2); // First Signal + Vault Sealer
+
+    await time.increase(SEVEN_DAYS + 1);
+    await vault.connect(recipient).claimMessage(messageId);
+
+    expect(await badges.hasBadge(recipient.address, 8)).to.equal(true);
+    expect(await badges.balanceOf(recipient.address)).to.equal(1);
+  });
+
+  it("allows the owner to update the CheckIn reference after the timelock", async () => {
+    const CheckIn = await ethers.getContractFactory("CheckIn");
+    const newCheckIn = await CheckIn.deploy(await badges.getAddress(), await checkIn.getAddress());
+
+    await expect(vault.proposeCheckInContract(await newCheckIn.getAddress()))
+      .to.emit(vault, "CheckInContractProposed");
+
+    await expect(vault.confirmCheckInContractUpdate())
+      .to.be.revertedWithCustomError(vault, "UpdateStillLocked");
+
+    await time.increase(5 * 24 * 60 * 60);
+
+    await expect(vault.confirmCheckInContractUpdate())
+      .to.emit(vault, "CheckInContractUpdated");
+
+    expect(await vault.checkInContract()).to.equal(await newCheckIn.getAddress());
   });
 });

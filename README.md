@@ -97,6 +97,16 @@ npx hardhat test
 npx hardhat run scripts/deploy.js --network ritual
 ```
 
+If `deployed.json` already contains a `checkIn` address, the deploy script passes it into the new `CheckIn` as `previousCheckIn`. Users can then click **Migrate signal** in the app to copy their previous heartbeat state into the new badge-enabled contract without losing streak data.
+
+You can override the migration source explicitly:
+
+```bash
+PREVIOUS_CHECKIN_ADDRESS=0xYourOldCheckIn npx hardhat run scripts/deploy.js --network ritual
+```
+
+Legacy vault messages stay in the vault contract where they were created. Keep the old vault address available if users still need to read or manage existing messages.
+
 ---
 
 ## Contract Overview

@@ -12,6 +12,27 @@ pragma solidity ^0.8.24;
  */
 interface ICheckIn {
     function lastSeen(address user) external view returns (uint256);
+    function totalUsers() external view returns (uint256);
+}
+
+interface IMessageVaultBadges {
+    function mintBadge(address user, uint8 badgeType) external returns (uint256);
+}
+
+interface IMessageScheduler {
+    function armMessage(
+        bytes32 messageId,
+        address messageOwner,
+        address recipient,
+        uint256 inactivityUnlock
+    ) external returns (uint256 warningCallId, uint256 unlockCallId);
+
+    function refreshMessage(
+        bytes32 messageId,
+        uint256 inactivityUnlock
+    ) external returns (uint256 warningCallId, uint256 unlockCallId);
+
+    function finalizeMessage(bytes32 messageId, string calldata reason) external;
 }
 
 contract MessageVault {
@@ -42,9 +63,14 @@ contract MessageVault {
 
     // CheckIn contract address (for reading heartbeat data)
     ICheckIn public checkInContract;
+    IMessageVaultBadges public badgeContract;
+    IMessageScheduler public schedulerNotifications;
 
     // owner => next message nonce
     mapping(address => uint256) private ownerNonces;
+
+    uint8 private constant VAULT_SEALER = 7;
+    uint8 private constant GUARDIAN = 8;
 
     // ── UPGRADE STATE ──
 
@@ -64,7 +90,9 @@ contract MessageVault {
 
     event MessageUnlocked(
         bytes32 indexed messageId,
+        address indexed owner,
         address indexed recipient,
+        uint256 inactiveDuration,
         uint256 unlockedAt
     );
 
@@ -107,6 +135,11 @@ contract MessageVault {
         address indexed canceledContract
     );
 
+    event SchedulerNotificationsUpdated(
+        address indexed oldScheduler,
+        address indexed newScheduler
+    );
+
     // ── ERRORS ──
 
     error MessageNotFound();
@@ -120,6 +153,7 @@ contract MessageVault {
     error NoPendingUpdate();
     error UpdateStillLocked();
     error InvalidContractAddress();
+    error HeartbeatTooStale();
 
     // ── MODIFIERS ──
 
@@ -130,9 +164,17 @@ contract MessageVault {
 
     // ── CONSTRUCTOR ──
 
-    constructor(address _checkInContract) {
+    constructor(
+        address _checkInContract,
+        address _badgeContract,
+        address _schedulerNotifications
+    ) {
         require(_checkInContract != address(0), "Invalid CheckIn contract");
+        require(_badgeContract != address(0), "Invalid badge contract");
+        require(_schedulerNotifications != address(0), "Invalid scheduler contract");
         checkInContract = ICheckIn(_checkInContract);
+        badgeContract = IMessageVaultBadges(_badgeContract);
+        schedulerNotifications = IMessageScheduler(_schedulerNotifications);
         owner = msg.sender;
     }
 
@@ -155,7 +197,8 @@ contract MessageVault {
         require(bytes(encryptedContent).length <= 100000, "Message too large (max 100KB)");
         require(inactivityUnlock >= 2 days, "Minimum unlock threshold is 2 days");
 
-        _requireHeartbeat(msg.sender);
+        uint256 ownerHeartbeat = _lastSeen(msg.sender);
+        if (_now() - ownerHeartbeat >= inactivityUnlock) revert HeartbeatTooStale();
 
         uint256 nonce = ownerNonces[msg.sender]++;
         messageId = keccak256(
@@ -175,6 +218,13 @@ contract MessageVault {
 
         ownerMessages[msg.sender].push(messageId);
         recipientMessages[recipient].push(messageId);
+        schedulerNotifications.armMessage(
+            messageId,
+            msg.sender,
+            recipient,
+            inactivityUnlock
+        );
+        try badgeContract.mintBadge(msg.sender, VAULT_SEALER) {} catch {}
 
         emit MessageSealed(
             messageId,
@@ -200,12 +250,14 @@ contract MessageVault {
         if (m.canceled) revert MessageIsCanceled();
 
         uint256 lastOwnerHeartbeat = _lastSeen(m.owner);
-        uint256 silence = block.timestamp - lastOwnerHeartbeat;
+        uint256 silence = _now() - lastOwnerHeartbeat;
         if (silence < m.inactivityUnlock) revert StillLocked();
 
         m.unlocked = true;
+        schedulerNotifications.finalizeMessage(messageId, "unlocked");
+        try badgeContract.mintBadge(msg.sender, GUARDIAN) {} catch {}
 
-        emit MessageUnlocked(messageId, msg.sender, block.timestamp);
+        emit MessageUnlocked(messageId, m.owner, msg.sender, silence, block.timestamp);
     }
 
     /**
@@ -218,6 +270,7 @@ contract MessageVault {
         _requireOwnedLockedMessage(m);
 
         m.canceled = true;
+        schedulerNotifications.finalizeMessage(messageId, "canceled");
 
         emit MessageCanceled(messageId, msg.sender, block.timestamp);
     }
@@ -257,6 +310,7 @@ contract MessageVault {
         _requireOwnedLockedMessage(m);
 
         m.inactivityUnlock = inactivityUnlock;
+        schedulerNotifications.refreshMessage(messageId, inactivityUnlock);
 
         emit MessageUnlockDelayUpdated(
             messageId,
@@ -312,7 +366,7 @@ contract MessageVault {
         );
 
         uint256 heartbeat = _lastSeen(m.owner);
-        uint256 silence = block.timestamp - heartbeat;
+        uint256 silence = _now() - heartbeat;
         uint256 remaining = silence >= m.inactivityUnlock
             ? 0
             : m.inactivityUnlock - silence;
@@ -350,7 +404,7 @@ contract MessageVault {
         Message storage m = messages[messageId];
         if (!m.exists || m.unlocked || m.canceled) return false;
         uint256 lastOwnerHeartbeat = _lastSeen(m.owner);
-        return block.timestamp >= lastOwnerHeartbeat + m.inactivityUnlock;
+        return _now() >= lastOwnerHeartbeat + m.inactivityUnlock;
     }
 
     /**
@@ -361,8 +415,8 @@ contract MessageVault {
         if (!m.exists) revert MessageNotFound();
         if (m.unlocked || m.canceled) return 0;
         uint256 unlockTime = _lastSeen(m.owner) + m.inactivityUnlock;
-        if (block.timestamp >= unlockTime) return 0;
-        return unlockTime - block.timestamp;
+        if (_now() >= unlockTime) return 0;
+        return unlockTime - _now();
     }
 
     // ── ADMIN FUNCTIONS ──
@@ -428,6 +482,16 @@ contract MessageVault {
         emit CheckInContractUpdateCanceled(pending);
     }
 
+    function setSchedulerNotifications(address newSchedulerNotifications) external onlyOwner {
+        require(newSchedulerNotifications != address(0), "Invalid scheduler contract");
+        require(newSchedulerNotifications.code.length > 0, "Scheduler must be contract");
+
+        address oldScheduler = address(schedulerNotifications);
+        schedulerNotifications = IMessageScheduler(newSchedulerNotifications);
+
+        emit SchedulerNotificationsUpdated(oldScheduler, newSchedulerNotifications);
+    }
+
     function _requireHeartbeat(address user) private view {
         _lastSeen(user);
     }
@@ -449,16 +513,18 @@ contract MessageVault {
 
     /**
      * @dev Verify an address is a contract implementing the ICheckIn interface.
-     *      Checks contract existence + makes a test call to lastSeen() to confirm
-     *      the interface is actually implemented.
+     *      Uses totalUsers() because lastSeen() correctly reverts for unknown users.
      */
     function _assertIsValidCheckIn(address candidate) private view {
         if (candidate.code.length == 0) revert InvalidContractAddress();
-        // Dry-run lastSeen(this) to confirm the interface works
-        try ICheckIn(candidate).lastSeen(address(this)) {
+        try ICheckIn(candidate).totalUsers() {
             // Interface conforms — call succeeded (even if it returns 0)
         } catch {
             revert InvalidContractAddress();
         }
+    }
+
+    function _now() private view returns (uint256) {
+        return block.timestamp > 1e12 ? block.timestamp / 1000 : block.timestamp;
     }
 }

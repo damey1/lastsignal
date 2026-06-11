@@ -1,5 +1,10 @@
 {
-  "checkIn": "0x67a2b93a6ab2945BEE1eb8C1C76a5e22Ebc1c71c",
-  "messageVault": "0xAD00AC0CfE2eD1F792a80E4EaAF8782D0c620B02",
-  "network": "ritual"
+  "badges": "0x045Ebe5e1D05B5e5c646713f14Ac344d7aaf1E22",
+  "checkIn": "0xb1f71239476643200b23Ce3B24a3701BEeadF24b",
+  "messageVault": "0x9d549CFFa35439e45Cdf8677232ef1058f42deE4",
+  "schedulerNotifications": "0x375E3dC51E7A15715e7eF1c1d1fC5fA39Eb71827",
+  "legacyMessageVault": "0x14609FA9270129bfD37FC85b69bd49BdA6fDfe90",
+  "previousCheckIn": "0x8A81adc79A883E46e7D8d93DD23b1998d8E70da5",
+  "network": "ritual",
+  "previousSchedulerNotifications": "0xC875A0A044d92A5fC21Cf432C763DC3693F2C922"
 }

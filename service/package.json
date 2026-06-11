@@ -1,0 +1,16 @@
+{
+  "name": "lastsignal-notifier",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "ethers": "^6.13.0",
+    "nodemailer": "^8.0.7",
+    "web-push": "^3.6.0"
+  }
+}
