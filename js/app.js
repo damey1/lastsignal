@@ -1106,7 +1106,8 @@ async function readUnlockedMessage(messageId, vault = state.vault) {
     }
 
     const plain = await decryptWithPassphrase(parsed.r, passphrase);
-    setStatus(ui.manageStatus, `📩 ${plain}`);
+    ui.plaintextMessage.value = plain;
+    setStatus(ui.manageStatus, "📩 Message decrypted — shown above");
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   }
