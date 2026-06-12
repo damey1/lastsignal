@@ -158,7 +158,8 @@ contract SchedulerNotifications {
         uint256 inactivityUnlock
     ) external onlyVault returns (uint256 warningCallId, uint256 unlockCallId) {
         MessageSchedule storage item = messageSchedules[messageId];
-        if (item.owner == address(0)) revert ScheduleNotFound();
+        // If no schedule exists (legacy message), skip — delay still updates in the vault
+        if (item.owner == address(0)) return (0, 0);
 
         item.inactivityUnlock = inactivityUnlock;
         item.completed = false;

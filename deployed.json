@@ -2,12 +2,12 @@
   "badges": "0x045Ebe5e1D05B5e5c646713f14Ac344d7aaf1E22",
   "checkIn": "0xb1f71239476643200b23Ce3B24a3701BEeadF24b",
   "messageVault": "0xD730338f19033790dF4731BA659C6e08E67C8138",
-  "schedulerNotifications": "0x779A33b5A3F19cFa4048dDf341fBC0c8e9BC39dD",
+  "schedulerNotifications": "0x3064f403768c5c45aB42309226D3357BaceD0bE2",
   "legacyMessageVault": "0x9d549CFFa35439e45Cdf8677232ef1058f42deE4",
   "legacyVaults": [
     "0x9d549CFFa35439e45Cdf8677232ef1058f42deE4"
   ],
   "previousCheckIn": "0x8A81adc79A883E46e7D8d93DD23b1998d8E70da5",
   "network": "ritual",
-  "previousSchedulerNotifications": "0x375E3dC51E7A15715e7eF1c1d1fC5fA39Eb71827"
+  "previousSchedulerNotifications": "0x779A33b5A3F19cFa4048dDf341fBC0c8e9BC39dD"
 }
