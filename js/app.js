@@ -426,6 +426,17 @@ function requireVault(vault = state.vault) {
   return vault;
 }
 
+async function requireHeartbeat() {
+  if (!state.checkIn) throw new Error("Load contracts first");
+  try {
+    const sig = await state.checkIn.mySignal();
+    if (!sig || !sig[5]) throw new Error("No heartbeat found — check in first");
+  } catch (e) {
+    if (e.message?.includes("No heartbeat")) throw e;
+    throw new Error("No heartbeat found — check in first");
+  }
+}
+
 async function switchToRitualChain() {
   const manualMsg = "Chain ID: 1979 · RPC: https://rpc.ritualfoundation.org · Add manually in wallet settings";
   setStatus(ui.signalStatus, "Requesting wallet...");
@@ -1056,6 +1067,7 @@ async function readOwnMessage(messageId = ui.manageMessageId.value.trim(), vault
 
 async function updateContent() {
   requireContracts();
+  await requireHeartbeat();
   const vault = state.selectedVault || state.vault;
   const messageId = ui.manageMessageId.value.trim();
   const plaintext = ui.updatedContent.value.trim();
@@ -1090,6 +1102,7 @@ async function updateContent() {
 
 async function updateDelay() {
   requireContracts();
+  await requireHeartbeat();
   const vault = state.selectedVault || state.vault;
   const messageId = ui.manageMessageId.value.trim();
   if (!messageId) throw new Error("Message ID required");
