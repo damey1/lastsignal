@@ -5,7 +5,6 @@
   "schedulerNotifications": "0x375E3dC51E7A15715e7eF1c1d1fC5fA39Eb71827",
   "legacyMessageVault": "0x9d549CFFa35439e45Cdf8677232ef1058f42deE4",
   "legacyVaults": [
-    "0x14609FA9270129bfD37FC85b69bd49BdA6fDfe90",
     "0x9d549CFFa35439e45Cdf8677232ef1058f42deE4"
   ],
   "previousCheckIn": "0x8A81adc79A883E46e7D8d93DD23b1998d8E70da5",
