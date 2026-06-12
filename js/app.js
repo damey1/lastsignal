@@ -234,6 +234,7 @@ const ui = {
   sealMessage: $("seal-message"),
   sealStatus: $("seal-status"),
   manageMessageId: $("manage-message-id"),
+  claimedMessage: $("claimed-message"),
   updatedContent: $("updated-content"),
   updatedUnlockDays: $("updated-unlock-days"),
   readOwnMessage: $("read-own-message"),
@@ -1106,8 +1107,8 @@ async function readUnlockedMessage(messageId, vault = state.vault) {
     }
 
     const plain = await decryptWithPassphrase(parsed.r, passphrase);
-    ui.plaintextMessage.value = plain;
-    setStatus(ui.manageStatus, "📩 Message decrypted — shown above");
+    ui.claimedMessage.value = plain;
+    setStatus(ui.manageStatus, "📩 Message decrypted — shown below");
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   }
@@ -1151,6 +1152,12 @@ function readableError(error) {
   }
   if (msg.includes("HeartbeatTooStale")) {
     return "Check in before sealing this lock duration";
+  }
+  if (msg.includes("AlreadyUnlocked")) {
+    return "Message has already been claimed — cannot modify or cancel";
+  }
+  if (msg.includes("MessageIsCanceled")) {
+    return "Message was already canceled";
   }
   if (msg.includes("unknown custom error")) {
     return "Transaction reverted — check wallet and try again";

@@ -302,10 +302,17 @@ async function backfillEvents() {
   const latest = await provider.getBlockNumber().catch(() => 0);
   if (latest < 1) return;
 
-  const fromBlock = loadLastBlock();
+  let fromBlock = loadLastBlock();
+
+  // First run — no saved block, skip historical and start from current
+  if (fromBlock === 0) {
+    saveLastBlock(latest);
+    return;
+  }
+
   if (fromBlock >= latest) return; // already caught up
 
-  const startBlock = Math.max(1, fromBlock + 1);
+  const startBlock = fromBlock + 1;
   const count = latest - startBlock;
   console.log(`  Backfill: scanning ${count} blocks (${startBlock} → ${latest})...`);
 
