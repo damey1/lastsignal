@@ -44,6 +44,7 @@ contract SchedulerNotifications {
 
     address public owner;
     address public vault;
+    mapping(address => bool) public authorizedVaults;
     IScheduledCheckIn public checkIn;
     IScheduler public scheduler;
 
@@ -95,7 +96,7 @@ contract SchedulerNotifications {
     }
 
     modifier onlyVault() {
-        if (msg.sender != vault) revert NotVault();
+        if (!authorizedVaults[msg.sender]) revert NotVault();
         _;
     }
 
@@ -115,6 +116,18 @@ contract SchedulerNotifications {
         if (newVault == address(0)) revert InvalidAddress();
         emit VaultUpdated(vault, newVault);
         vault = newVault;
+        authorizedVaults[newVault] = true;
+    }
+
+    function authorizeVault(address vaultAddress) external onlyOwner {
+        if (vaultAddress == address(0)) revert InvalidAddress();
+        authorizedVaults[vaultAddress] = true;
+        emit VaultUpdated(address(0), vaultAddress);
+    }
+
+    function deauthorizeVault(address vaultAddress) external onlyOwner {
+        authorizedVaults[vaultAddress] = false;
+        emit VaultUpdated(vaultAddress, address(0));
     }
 
     function setCheckIn(address newCheckIn) external onlyOwner {
@@ -145,7 +158,8 @@ contract SchedulerNotifications {
         uint256 inactivityUnlock
     ) external onlyVault returns (uint256 warningCallId, uint256 unlockCallId) {
         MessageSchedule storage item = messageSchedules[messageId];
-        if (item.owner == address(0)) revert ScheduleNotFound();
+        // If no schedule exists (legacy message), skip — delay still updates in the vault
+        if (item.owner == address(0)) return (0, 0);
 
         item.inactivityUnlock = inactivityUnlock;
         item.completed = false;

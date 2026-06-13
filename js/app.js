@@ -234,6 +234,7 @@ const ui = {
   sealMessage: $("seal-message"),
   sealStatus: $("seal-status"),
   manageMessageId: $("manage-message-id"),
+  claimedMessage: $("claimed-message"),
   updatedContent: $("updated-content"),
   updatedUnlockDays: $("updated-unlock-days"),
   readOwnMessage: $("read-own-message"),
@@ -374,8 +375,22 @@ function configureContracts() {
 
   state.checkIn = new ethers.Contract(checkInAddress, CHECKIN_ABI, state.signer);
   state.vault = new ethers.Contract(vaultAddress, VAULT_ABI, state.signer);
+
+  // Set up all legacy vaults (from array + single field backward compat)
+  state.legacyVaults = [];
+  const legacyAddrs = state.deployed?.legacyVaults || [];
+  for (const addr of legacyAddrs) {
+    if (ethers.isAddress(addr) && !sameAddress(addr, vaultAddress)) {
+      state.legacyVaults.push(new ethers.Contract(addr, VAULT_ABI, state.signer));
+    }
+  }
+  // Backward compat: single legacyMessageVault field
   if (ethers.isAddress(legacyVaultAddress) && !sameAddress(legacyVaultAddress, vaultAddress)) {
-    state.legacyVault = new ethers.Contract(legacyVaultAddress, VAULT_ABI, state.signer);
+    const exists = state.legacyVaults.some(v => sameAddress(v.target, legacyVaultAddress));
+    if (!exists) {
+      state.legacyVaults.push(new ethers.Contract(legacyVaultAddress, VAULT_ABI, state.signer));
+    }
+    state.legacyVault = state.legacyVaults[state.legacyVaults.length - 1];
   }
   if (ethers.isAddress(badgesAddress)) {
     state.badges = new ethers.Contract(badgesAddress, BADGE_ABI, state.signer);
@@ -409,6 +424,17 @@ function requireVault(vault = state.vault) {
   if (!state.signer) throw new Error("Connect wallet first");
   if (!vault) throw new Error("Load vault address first");
   return vault;
+}
+
+async function requireHeartbeat() {
+  if (!state.checkIn) throw new Error("Load contracts first");
+  try {
+    const sig = await state.checkIn.mySignal();
+    if (!sig || !sig[5]) throw new Error("No heartbeat found — check in first");
+  } catch (e) {
+    if (e.message?.includes("No heartbeat")) throw e;
+    throw new Error("No heartbeat found — check in first");
+  }
 }
 
 async function switchToRitualChain() {
@@ -845,8 +871,52 @@ async function refreshMessages() {
 }
 
 async function refreshLegacyMessages() {
-  if (!state.legacyVault) return;
-  await refreshVaultMessages(state.legacyVault, ui.legacyOwnedMessages, ui.legacyRecipientMessages, "legacy");
+  if (!state.legacyVaults || state.legacyVaults.length === 0) return;
+
+  let totalOwned = 0, totalRecipient = 0;
+  for (let i = 0; i < state.legacyVaults.length; i++) {
+    const vault = state.legacyVaults[i];
+    const ownedContainer = document.createElement("div");
+    ownedContainer.className = "message-subsection";
+    const recvContainer = document.createElement("div");
+    recvContainer.className = "message-subsection";
+
+    if (i > 0) {
+      // Add separator between different vaults' messages
+      const sep = document.createElement("hr");
+      sep.className = "claimed-divider";
+      ownedContainer.appendChild(sep.cloneNode());
+      recvContainer.appendChild(sep.cloneNode());
+    }
+
+    try {
+      const ids = await Promise.all([
+        vault.getMyMessages(),
+        vault.getMessagesForMe()
+      ]);
+      totalOwned += ids[0].length;
+      totalRecipient += ids[1].length;
+
+      await renderMessages(vault, ownedContainer, ids[0], "owner", "legacy");
+      await renderMessages(vault, recvContainer, ids[1], "recipient", "legacy");
+    } catch {
+      // Vault may be empty or inaccessible — skip
+    }
+
+    // Append to the main containers
+    if (i === 0) {
+      // First vault replaces the main content
+      ui.legacyOwnedMessages.innerHTML = "";
+      ui.legacyRecipientMessages.innerHTML = "";
+    }
+    ui.legacyOwnedMessages.appendChild(ownedContainer);
+    ui.legacyRecipientMessages.appendChild(recvContainer);
+  }
+
+  // Also support single legacyVault (backward compat)
+  if (totalOwned === 0 && totalRecipient === 0 && state.legacyVault) {
+    await refreshVaultMessages(state.legacyVault, ui.legacyOwnedMessages, ui.legacyRecipientMessages, "legacy");
+  }
 }
 
 async function refreshVaultMessages(vault, ownedContainer, recipientContainer, source) {
@@ -937,6 +1007,7 @@ function messageCard(vault, id, info, unlockable, mode, source) {
 
   const select = actionButton("Select", () => {
     ui.manageMessageId.value = id;
+    state.selectedVault = vault;
     setStatus(ui.manageStatus, `Selected ${source === "legacy" ? "legacy " : ""}${id}`);
   });
   actions.appendChild(select);
@@ -970,7 +1041,7 @@ function actionButton(label, onClick) {
   return button;
 }
 
-async function readOwnMessage(messageId = ui.manageMessageId.value.trim(), vault = state.vault) {
+async function readOwnMessage(messageId = ui.manageMessageId.value.trim(), vault = state.selectedVault || state.vault) {
   vault = requireVault(vault);
   try {
     const raw = await vault.readOwnMessage(messageId);
@@ -996,6 +1067,8 @@ async function readOwnMessage(messageId = ui.manageMessageId.value.trim(), vault
 
 async function updateContent() {
   requireContracts();
+  await requireHeartbeat();
+  const vault = state.selectedVault || state.vault;
   const messageId = ui.manageMessageId.value.trim();
   const plaintext = ui.updatedContent.value.trim();
   if (!messageId || !plaintext) throw new Error("Message ID and plaintext required");
@@ -1015,7 +1088,7 @@ async function updateContent() {
 
     const gas = await gasEstimateLabel();
     setStatus(ui.manageStatus, `Rotating content ${gas}`.trim());
-    const tx = await state.vault.updateMessageContent(messageId, payload);
+    const tx = await vault.updateMessageContent(messageId, payload);
     const receipt = await tx.wait();
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.manageStatus, `Content updated — ${link}`);
@@ -1029,6 +1102,8 @@ async function updateContent() {
 
 async function updateDelay() {
   requireContracts();
+  await requireHeartbeat();
+  const vault = state.selectedVault || state.vault;
   const messageId = ui.manageMessageId.value.trim();
   if (!messageId) throw new Error("Message ID required");
 
@@ -1036,7 +1111,7 @@ async function updateDelay() {
   try {
     const gas = await gasEstimateLabel();
     setStatus(ui.manageStatus, `Updating delay ${gas}`.trim());
-    const tx = await state.vault.updateInactivityUnlock(messageId, daysToSeconds(ui.updatedUnlockDays.value));
+    const tx = await vault.updateInactivityUnlock(messageId, daysToSeconds(ui.updatedUnlockDays.value));
     const receipt = await tx.wait();
     const link = explorerTxUrl(receipt.hash);
     setStatus(ui.manageStatus, `Delay updated — ${link}`);
@@ -1048,7 +1123,7 @@ async function updateDelay() {
   }
 }
 
-async function cancelMessage(messageId = ui.manageMessageId.value.trim(), vault = state.vault) {
+async function cancelMessage(messageId = ui.manageMessageId.value.trim(), vault = state.selectedVault || state.vault) {
   vault = requireVault(vault);
   if (!messageId) throw new Error("Message ID required");
 
@@ -1106,7 +1181,8 @@ async function readUnlockedMessage(messageId, vault = state.vault) {
     }
 
     const plain = await decryptWithPassphrase(parsed.r, passphrase);
-    setStatus(ui.manageStatus, `📩 ${plain}`);
+    ui.claimedMessage.value = plain;
+    setStatus(ui.manageStatus, "📩 Message decrypted — shown below");
   } catch (error) {
     setStatus(ui.manageStatus, readableError(error));
   }
@@ -1150,6 +1226,12 @@ function readableError(error) {
   }
   if (msg.includes("HeartbeatTooStale")) {
     return "Check in before sealing this lock duration";
+  }
+  if (msg.includes("AlreadyUnlocked")) {
+    return "Message has already been claimed — cannot modify or cancel";
+  }
+  if (msg.includes("MessageIsCanceled")) {
+    return "Message was already canceled";
   }
   if (msg.includes("unknown custom error")) {
     return "Transaction reverted — check wallet and try again";

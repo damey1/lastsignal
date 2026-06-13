@@ -218,12 +218,14 @@ contract MessageVault {
 
         ownerMessages[msg.sender].push(messageId);
         recipientMessages[recipient].push(messageId);
-        schedulerNotifications.armMessage(
+        try schedulerNotifications.armMessage(
             messageId,
             msg.sender,
             recipient,
             inactivityUnlock
-        );
+        ) returns (uint256, uint256) {} catch {
+            // Scheduler may be unavailable — message seals regardless
+        }
         try badgeContract.mintBadge(msg.sender, VAULT_SEALER) {} catch {}
 
         emit MessageSealed(
@@ -254,7 +256,7 @@ contract MessageVault {
         if (silence < m.inactivityUnlock) revert StillLocked();
 
         m.unlocked = true;
-        schedulerNotifications.finalizeMessage(messageId, "unlocked");
+        try schedulerNotifications.finalizeMessage(messageId, "unlocked") {} catch {}
         try badgeContract.mintBadge(msg.sender, GUARDIAN) {} catch {}
 
         emit MessageUnlocked(messageId, m.owner, msg.sender, silence, block.timestamp);
@@ -270,7 +272,7 @@ contract MessageVault {
         _requireOwnedLockedMessage(m);
 
         m.canceled = true;
-        schedulerNotifications.finalizeMessage(messageId, "canceled");
+        try schedulerNotifications.finalizeMessage(messageId, "canceled") {} catch {}
 
         emit MessageCanceled(messageId, msg.sender, block.timestamp);
     }
@@ -310,7 +312,9 @@ contract MessageVault {
         _requireOwnedLockedMessage(m);
 
         m.inactivityUnlock = inactivityUnlock;
-        schedulerNotifications.refreshMessage(messageId, inactivityUnlock);
+        try schedulerNotifications.refreshMessage(messageId, inactivityUnlock) returns (uint256, uint256) {} catch {
+            // Scheduler schedule may be stale — unlock delay updated regardless
+        }
 
         emit MessageUnlockDelayUpdated(
             messageId,

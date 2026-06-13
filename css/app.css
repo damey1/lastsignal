@@ -649,6 +649,18 @@
   to { transform: rotate(360deg); }
 }
 
+/* Claimed message divider */
+.claimed-divider {
+  border: none;
+  border-top: 1px solid rgba(124, 92, 191, 0.25);
+  margin: 20px 0 16px;
+}
+
+.claimed-label {
+  color: var(--green) !important;
+  font-size: 11px !important;
+}
+
 @media (max-width: 560px) {
   .app-shell {
     padding: 104px 18px 40px;
